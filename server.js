@@ -45,8 +45,8 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
 :root{--bg:#060a0f;--surface:#0f1419;--surface2:#161d26;--border:#1e2a38;--accent:#3cc168;--text:#f0f4f8;--text2:#8899aa;--text3:#4a5f72;--field-bg:#1a2330;--danger:#e84545;--warn:#f0a500;--radius:12px}
 .topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 28px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
 .tb-left{display:flex;align-items:center;gap:10px}
-.agency-logo{width:34px;height:34px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;overflow:hidden;flex-shrink:0;padding:0}
-.agency-logo img{width:34px;height:34px;object-fit:cover;display:block;border-radius:8px}
+.agency-logo{width:34px;height:34px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;overflow:hidden;flex-shrink:0;padding:0;position:relative}
+.agency-logo img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;border-radius:8px;background:#fff;padding:2px}
 .tb-name{font-weight:600;font-size:14px;color:var(--text)}
 .tb-badge{font-size:11px;padding:2px 8px;border-radius:20px;background:rgba(60,193,104,.15);color:var(--accent);font-weight:600;letter-spacing:.04em}
 .progress-wrap{flex:1;max-width:280px;margin:0 24px}
@@ -289,7 +289,7 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
       <li class="loading-step" id="ls2"><div class="step-dot"></div>Competitor analysis</li>
       <li class="loading-step" id="ls3"><div class="step-dot"></div>Backlinks &amp; top pages</li>
       <li class="loading-step" id="ls4"><div class="step-dot"></div>Reviews, ads &amp; website audit</li>
-      <li class="loading-step" id="ls5"><div class="step-dot"></div>AI analysis &amp; report</li>
+      <li class="loading-step" id="ls5"><div class="step-dot"></div>5-pass AI analysis (exec, gaps, personas, competitors, roadmap)</li>
     </ul>
   </div>
 </div>
@@ -906,20 +906,34 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
   rmHtml+='</div>';
   slides.push(lightSlide('Roadmap',tag('6-Month Roadmap')+title('The Plan to Get There')+rmHtml));
 
-  // SLIDE 11: CHECKLIST
-  var chk=report.checklist||report.onboarding_checklist||[];
-  var chkHtml='<ul style="list-style:none;margin-top:14px">';
-  var chkIdx=0;
-  chk.forEach(function(phase){
-    if(phase.phase||phase.items){
-      chkHtml+='<li class="r-chk-phase">'+esc(phase.phase||'')+'</li>';
-      (phase.items||[]).forEach(function(item){
-        var t=typeof item==='string'?item:(item.task||item);
-        chkHtml+='<li class="r-chk-item" onclick="this.classList.toggle(\\'checked\\')"><div class="r-chk-box">✓</div><span class="r-chk-text">'+esc(t)+'</span></li>';
-        chkIdx++;
-      });
+    // SLIDE 11: CHECKLIST
+  var rawChk=report.checklist||report.onboarding_checklist||[];
+  // Normalise: handle both flat [{task,phase}] and grouped [{phase,items:[]}] formats
+  var chkGroups={};
+  var chkOrder=[];
+  rawChk.forEach(function(item){
+    if(item.items){
+      // Grouped format
+      var ph=item.phase||'General';
+      if(!chkGroups[ph]){chkGroups[ph]=[];chkOrder.push(ph);}
+      (item.items||[]).forEach(function(it){chkGroups[ph].push(typeof it==='string'?it:(it.task||it));});
+    } else if(item.task){
+      // Flat format
+      var ph=item.phase||'Foundation';
+      if(!chkGroups[ph]){chkGroups[ph]=[];chkOrder.push(ph);}
+      chkGroups[ph].push(item.task+(item.detail?' — '+item.detail:''));
     }
   });
+  var chkHtml='<ul style="list-style:none;margin-top:14px">';
+  var phaseColors={Foundation:color,Acquisition:'#3b82f6',Conversion:'#d97706',Retention:'#8b5cf6',Scale:'#ef4444',General:'#6b7280'};
+  chkOrder.forEach(function(ph){
+    var phColor=phaseColors[ph]||color;
+    chkHtml+='<li style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:'+phColor+';margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid '+phColor+'22">'+esc(ph)+'</li>';
+    (chkGroups[ph]||[]).forEach(function(task){
+      chkHtml+='<li class="r-chk-item" onclick="this.classList.toggle(\\'checked\\')">\<div class="r-chk-box">✓</div><span class="r-chk-text">'+esc(task)+'</span></li>';
+    });
+  });
+  if(chkOrder.length===0){chkHtml+='<li style="color:#999;font-size:13px;padding:10px 0">No checklist data available.</li>';}
   chkHtml+='</ul>';
   slides.push(lightSlide('Checklist',tag('Onboarding Checklist')+title('Getting Started — Tick It Off')+chkHtml));
 
@@ -1085,7 +1099,7 @@ app.post('/generate', async (req, res) => {
     send('progress', { msg: 'Researching reviews & brand signals', pct: 68 });
     const research = await webResearch(clientName, domain);
 
-    send('progress', { msg: 'Running deep AI analysis', pct: 82 });
+    send('progress', { msg: 'Running AI analysis (5 parallel passes)...', pct: 82 });
     const report = await runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers);
     report.web_research = research;
 
@@ -1162,81 +1176,338 @@ async function webResearch(clientName, domain) {
   };
 }
 
+// ─── Multi-pass AI Analysis Engine ───────────────────────────────────────────
+// Each pass focuses deeply on one area. Results are combined into a rich report.
+
 async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers) {
   const q = answers || {};
-  const lines = [
-    `Generate a complete brand diagnostic report for ${clientName} (${domain}).`,
-    `MODE: ${mode} | TYPE: ${bizType}`, ``,
-    q.financials   ? `FINANCIALS: ${JSON.stringify(q.financials)}`    : '',
-    q.brand        ? `BRAND: ${JSON.stringify(q.brand)}`              : '',
-    q.goals        ? `GOALS: ${JSON.stringify(q.goals)}`              : '',
-    q.obstacles    ? `OBSTACLES: ${JSON.stringify(q.obstacles)}`      : '',
-    q.customer     ? `CUSTOMER: ${JSON.stringify(q.customer)}`        : '',
-    q.painpoints   ? `PAIN POINTS: ${JSON.stringify(q.painpoints)}`   : '',
-    q.objections   ? `OBJECTIONS: ${JSON.stringify(q.objections)}`    : '',
-    q.products     ? `PRODUCTS: ${JSON.stringify(q.products)}`        : '',
-    q.competitors  ? `COMPETITORS: ${JSON.stringify(q.competitors)}`  : '',
-    q.acquisition  ? `ACQUISITION: ${JSON.stringify(q.acquisition)}`  : '',
-    q.retention    ? `RETENTION: ${JSON.stringify(q.retention)}`      : '',
-    q.type_specific ? `TYPE-SPECIFIC: ${JSON.stringify(q.type_specific)}` : '',
-    ``,
-    `LIVE AHREFS DATA:`,
-    `Domain Rating: ${ahrefs.domain_rating}/100`,
-    `Organic Traffic: ${(ahrefs.org_traffic || 0).toLocaleString()}/mo`,
-    `Ranking Keywords: ${(ahrefs.org_keywords || 0).toLocaleString()} (${ahrefs.org_keywords_1_3} in top 3)`,
-    `Traffic Value: ${ahrefs.org_cost ? '$' + Math.round(ahrefs.org_cost / 100).toLocaleString() + '/mo' : 'N/A'}`,
-    `Paid Traffic: ${ahrefs.paid_traffic} | Paid Keywords: ${ahrefs.paid_keywords}`,
-    `Backlinks: ${ahrefs.backlinks_live} | Referring Domains: ${ahrefs.ref_domains}`,
-    `Top Keywords: ${JSON.stringify(ahrefs.keywords?.slice(0, 8))}`,
-    `Competitors: ${JSON.stringify(ahrefs.competitors)}`,
-    `Top Pages: ${JSON.stringify(ahrefs.top_pages?.slice(0, 5))}`,
-    ``,
-    `WEB RESEARCH SUMMARY:`,
-    `Reviews: ${research.avg_rating} | ${research.review_count} | Sentiment: ${research.brand_reputation}`,
-    `Common praise: ${(research.common_praise||[]).join(', ')}`,
-    `Common complaints: ${(research.common_complaints||[]).join(', ')}`,
-    `Ads running: ${research.ads_running} on ${(research.ad_platforms||[]).join(', ')} | Spend level: ${research.ad_spend_estimate}`,
-    `Ad description: ${research.ad_description}`,
-    `Website CRO: ${research.website_cro_score} | ${research.website_assessment}`,
-    `CRO issues: ${(research.website_cro_issues||[]).join(', ')}`,
-    `Offer strength: ${research.offer_strength} | ${research.offer_analysis}`,
-    `Social: ${research.social_presence}`,
-    `Biggest digital gap from research: ${research.biggest_digital_gap}`,
-    ``,
-    `SIGNAL RULES: paid_traffic=0 AND ads_running=false → "No paid advertising running" as CRITICAL gap; domain_rating<20 → "Very low domain authority" HIGH gap; domain_rating<40 → "Below average authority" warn gap; org_keywords_1_3=0 → "Zero top-3 rankings" HIGH gap; website_cro_score poor/fair → "Website CRO needs work" gap; offer_strength weak → "Weak offer positioning" gap`,
-    ``,
-    `Return ONLY this exact JSON (specific data-driven content, no placeholders):`,
-    JSON.stringify({
-      exec_past: "specific 2-3 sentences citing actual Ahrefs numbers",
-      exec_future: "2-3 sentences on goals from questionnaire",
-      exec_agency: "2-3 sentences on recommended strategic approach",
-      health_scores: { seo: 0, paid: 0, content: 0, brand: 0, conversion: 0, retention: 0 },
-      health_notes: { seo: "", paid: "", content: "", brand: "", conversion: "", retention: "" },
-      digital_analysis: { summary: "paragraph with specific numbers", signals: [{ label: "", status: "good|warn|bad", value: "", insight: "" }], keyword_opportunity: "", paid_gap: "" },
-      business_canvas: { key_partners: [], key_activities: [], key_resources: [], value_propositions: [], customer_relationships: [], channels: [], customer_segments: [], cost_structure: [], revenue_streams: [] },
-      personas: [{ name: "", tagline: "", dream_outcome: "", who: "", income: "", trigger: "", pains: [], objections: [], product_focus: [], messaging_hook: "" }],
-      competitor_analysis: { summary: "", strengths_vs_competitors: [], weaknesses_vs_competitors: [], market_gaps: [] },
-      review_insights: { overall_sentiment: "positive|mixed|negative", avg_rating: "", key_themes: [], trust_signals: [], reputation_risks: [], recommendation: "" },
-      gap_analysis: [{ title: "", desc: "2 sentences with revenue impact", priority: "high|medium|low", category: "SEO|Paid|Content|Brand|CRO|Retention|Strategy", quick_win: false }],
-      forecast: { current_revenue: "", conservative_12m: "", optimistic_12m: "", revenue_per_channel: [{ channel: "", current: "", potential: "" }], key_assumptions: [] },
-      roadmap: [{ phase: "Phase 1", months: "Month 1-2", label: "Foundation", items: [{ task: "", detail: "" }] }],
-      onboarding_checklist: [{ task: "", phase: "Foundation", priority: "critical|high|medium|low", owner: "Agency|Client|Both", week: "Week 1", detail: "" }],
-      closing: { headline: "", narrative: "", next_step: "" }
-    })
-  ];
+  const isDeep = mode === 'deep';
 
+  // Build a shared context string used across all passes
+  const ctx = buildContext(clientName, domain, bizType, ahrefs, research, q);
+
+  // Run passes in parallel where possible
+  const [
+    execAndScores,
+    gapAndForecast,
+    personaAndOffer,
+    competitorIntel,
+    roadmapAndChecklist
+  ] = await Promise.all([
+    pass_execAndScores(ctx, clientName, domain, ahrefs, research, isDeep),
+    pass_gapAndForecast(ctx, clientName, ahrefs, research, isDeep),
+    pass_personaAndOffer(ctx, clientName, research, q, isDeep),
+    pass_competitorIntel(ctx, clientName, domain, ahrefs, research, isDeep),
+    pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep)
+  ]);
+
+  // Merge all passes into one report object
+  return {
+    ...execAndScores,
+    ...gapAndForecast,
+    ...personaAndOffer,
+    ...competitorIntel,
+    ...roadmapAndChecklist
+  };
+}
+
+function buildContext(clientName, domain, bizType, ahrefs, research, q) {
+  return `
+CLIENT: ${clientName} | DOMAIN: ${domain} | TYPE: ${bizType}
+FINANCIALS: Revenue ${(q.financials||{}).fin_revenue} → Target ${(q.financials||{}).fin_target} | Ad spend: ${(q.financials||{}).fin_adspend}
+GOALS: ${(q.financials||{}).fin_goals}
+BRAND: ${(q.brand||{}).brand_desc} | USP: ${(q.brand||{}).brand_usp}
+OBSTACLES: ${(q.obstacles||{}).obs_main} | Tried: ${(q.obstacles||{}).obs_tried}
+MARKETING: Channels: ${JSON.stringify((q.marketing||{}).mkt_channels)} | Best: ${(q.marketing||{}).mkt_best}
+COMPETITORS (stated): ${(q.competitors||{}).comp_main}
+PRODUCTS: ${(q.products||{}).prod_main} | AOV: ${(q.products||{}).prod_aov}
+RETENTION: LTV: ${(q.retention||{}).ret_ltv} | Strategy: ${(q.retention||{}).ret_strategy}
+PERSONAS: ${(q.personas||{}).persona_who} | Journey: ${(q.personas||{}).persona_journey}
+PAIN POINTS: Before: ${(q.painpoints||{}).pain_before} | Dream: ${(q.painpoints||{}).pain_dream}
+OBJECTIONS: ${(q.objections||{}).obj_main} | Handling: ${(q.objections||{}).obj_handle}
+REVIEWS (stated): ${(q.reviews||{}).rev_rating} | Positive: ${(q.reviews||{}).rev_positive}
+
+LIVE AHREFS DATA:
+DR: ${ahrefs.domain_rating}/100 | Organic: ${(ahrefs.org_traffic||0).toLocaleString()}/mo | Paid: ${ahrefs.paid_traffic||0}
+Keywords: ${ahrefs.org_keywords||0} total (${ahrefs.org_keywords_1_3||0} in top 3)
+Backlinks: ${ahrefs.backlinks_live||0} | Ref domains: ${ahrefs.ref_domains||0}
+Traffic value: ${ahrefs.org_cost ? '$'+Math.round(ahrefs.org_cost/100).toLocaleString()+'/mo' : 'N/A'}
+Top keywords: ${JSON.stringify((ahrefs.keywords||[]).slice(0,6))}
+
+WEB RESEARCH:
+Reviews: ${research.avg_rating} (${research.review_count}) | Sentiment: ${research.brand_reputation}
+Praise: ${(research.common_praise||[]).join('; ')}
+Complaints: ${(research.common_complaints||[]).join('; ')}
+Ads: ${research.ads_running ? 'RUNNING on '+((research.ad_platforms||[]).join(', ')) : 'NOT DETECTED'} | ${research.ad_description}
+Website CRO: ${research.website_cro_score} | ${research.website_assessment}
+CRO Issues: ${(research.website_cro_issues||[]).join('; ')}
+Offer: ${research.offer_strength} — ${research.offer_analysis}
+Social: ${research.social_presence}
+Biggest gap from research: ${research.biggest_digital_gap}
+`;
+}
+
+async function pass_execAndScores(ctx, clientName, domain, ahrefs, research, isDeep) {
+  const prompt = `You are a world-class brand strategist producing a paid brand diagnostic for ${clientName}.
+
+${ctx}
+
+TASK: Write a sharp, specific executive summary and performance health scorecard. Use REAL numbers from the Ahrefs and research data. Be commercially direct — this is a paid deliverable.
+
+Return ONLY valid JSON:
+{
+  "exec_past": "3-4 sentences: their current position using specific numbers (DR, traffic, revenue band, what's working/not). Name the domain. Cite actual Ahrefs metrics.",
+  "exec_future": "2-3 sentences: their stated goals, timeline, and what achieving it would mean for the business.",
+  "exec_agency": "2-3 sentences: the strategic approach this agency recommends — specific, not generic.",
+  "revenue_now": "stated/estimated current revenue",
+  "revenue_target": "their stated 12-month target",
+  "revenue_forecast_conservative": "conservative 12-month forecast with agency support",
+  "revenue_forecast_optimistic": "optimistic 12-month forecast",
+  "forecast_reasoning": "3-4 sentences: specific reasoning citing channels, conversion assumptions, and which gaps drive the uplift",
+  "health_scores": {
+    "seo": 0,
+    "paid": 0,
+    "content": 0,
+    "brand": 0,
+    "conversion": 0,
+    "retention": 0
+  },
+  "health_notes": {
+    "seo": "1 specific sentence on why this score — cite DR, keyword count, top-3 rankings",
+    "paid": "1 specific sentence — cite whether ads detected, spend level, platform",
+    "content": "1 specific sentence — cite content strategy finding from research",
+    "brand": "1 specific sentence — cite offer strength, CRO score, messaging clarity",
+    "conversion": "1 specific sentence — cite CRO assessment, website issues found",
+    "retention": "1 specific sentence — cite LTV, churn, retention strategy"
+  },
+  "digital_analysis": {
+    "summary": "4-5 sentences using specific Ahrefs numbers. Mention the DR, compare paid vs organic, highlight the most important signal. Be direct about what the numbers mean commercially.",
+    "signals": [
+      {"label": "specific signal name", "status": "good|warn|bad", "value": "specific metric", "insight": "what this means for revenue"}
+    ],
+    "keyword_opportunity": "specific untapped keyword opportunity based on their niche and current rankings",
+    "paid_gap": "specific assessment of their paid advertising gap and what it is costing them monthly"
+  }
+}`;
+
+  return await callClaude(prompt, 2000, true);
+}
+
+async function pass_gapAndForecast(ctx, clientName, ahrefs, research, isDeep) {
+  const prompt = `You are a senior growth strategist. Analyse the data below and identify the most commercially significant gaps for ${clientName}.
+
+${ctx}
+
+TASK: Produce a rigorous gap analysis and revenue forecast. Each gap must have a specific revenue impact estimate. Use the Ahrefs data and web research to ground every finding — no generic gaps.
+
+Return ONLY valid JSON:
+{
+  "gaps": [
+    {
+      "title": "specific gap title",
+      "type": "critical|opportunity|warning",
+      "desc": "3-4 sentences: what the gap is, specific evidence from the data (cite Ahrefs numbers or research findings), estimated monthly/annual revenue being lost or left on the table, and why fixing it should be prioritised",
+      "revenue_impact": "e.g. $8,000-$15,000/month opportunity",
+      "effort": "low|medium|high",
+      "timeframe": "e.g. 2-4 weeks to implement"
+    }
+  ],
+  "forecast": {
+    "current_revenue": "stated or estimated",
+    "conservative_12m": "with foundational fixes only",
+    "optimistic_12m": "with full strategy execution",
+    "revenue_per_channel": [
+      {"channel": "channel name", "current": "current contribution", "potential": "12-month potential"}
+    ],
+    "key_assumptions": ["specific assumption 1", "specific assumption 2", "specific assumption 3"]
+  }
+}
+
+Rules:
+- Minimum 5 gaps for quick mode, 8 gaps for deep mode
+- Every gap must cite specific data (a number, a finding, a missing element)
+- Revenue impact must be specific (not "significant" — give a dollar range)
+- Include gaps from: SEO, paid ads, CRO, email/retention, offer, brand, content, social proof`;
+
+  const result = await callClaude(prompt, 2500, false);
+  // Also search for additional competitive intelligence
+  if (isDeep) {
+    try {
+      const extraResearch = await callClaudeWithSearch(
+        `Research the competitive paid advertising landscape for businesses like ${clientName} in their industry. What are competitors spending on ads? What keywords are they bidding on? What offers are converting in this market? What benchmarks should ${clientName} be targeting for CAC, ROAS, and conversion rates? Return specific, actionable intelligence.`,
+        1000
+      );
+      if (result.gaps && extraResearch) {
+        result.competitive_ad_intel = extraResearch;
+      }
+    } catch(e) { console.warn('Extra research failed:', e.message); }
+  }
+  return result;
+}
+
+async function pass_personaAndOffer(ctx, clientName, research, q, isDeep) {
+  const prompt = `You are a direct response copywriter and customer psychology expert analysing ${clientName}.
+
+${ctx}
+
+TASK: Build a detailed customer avatar and offer analysis. Use the questionnaire answers AND the web research (especially reviews) to make this specific and real. The persona should feel like a real person, not a template.
+
+Return ONLY valid JSON:
+{
+  "personas": [
+    {
+      "name": "specific persona name (not 'Persona 1')",
+      "tagline": "one-line description of who they are",
+      "who": "specific demographics and psychographics",
+      "income": "income range and financial situation",
+      "dream_outcome": "their specific dream outcome in their own words",
+      "trigger": "the exact moment/event that makes them decide to buy",
+      "pains": ["specific pain 1 (from reviews/questionnaire)", "specific pain 2", "specific pain 3", "specific pain 4"],
+      "objections": ["most common objection 1", "objection 2", "objection 3"],
+      "product_focus": ["which offers resonate most"],
+      "messaging_hook": "a specific, emotionally resonant hook this agency should test in ads and copy",
+      "where_to_find": "exactly where this person spends time online — platforms, communities, content they consume",
+      "buying_process": "how long, how many touchpoints, what convinces them"
+    }
+  ],
+  "offer_analysis": {
+    "offer_strength": "weak|moderate|strong",
+    "pricing_assessment": "specific assessment of whether pricing is competitive, too high, too low",
+    "value_proposition_clarity": "poor|fair|good|excellent",
+    "missing_elements": ["what the offer is missing vs best-in-class competitors"],
+    "conversion_killers": ["specific things on the website/in the sales process killing conversions"],
+    "quick_wins": ["3-5 specific changes to the offer or positioning that could increase conversions immediately"],
+    "upsell_opportunities": ["specific upsell or cross-sell opportunities they are missing"]
+  }
+}`;
+
+  return await callClaude(prompt, 2000, false);
+}
+
+async function pass_competitorIntel(ctx, clientName, domain, ahrefs, research, isDeep) {
+  const competitors = (ahrefs.competitors || []).slice(0, 5);
+  const prompt = `You are a competitive intelligence analyst. Analyse the market position of ${clientName} (${domain}).
+
+${ctx}
+
+AHREFS COMPETITOR DATA: ${JSON.stringify(competitors)}
+
+TASK: Produce a sharp competitor analysis that identifies where ${clientName} can win, where they are losing, and specific gaps in the market they can exploit. If ads are running, analyse the messaging. Be specific.
+
+Return ONLY valid JSON:
+{
+  "competitor_analysis": {
+    "summary": "4-5 sentences on the competitive landscape — who the real threats are, how ${clientName} stacks up on DR/traffic, what the market looks like",
+    "strengths_vs_competitors": ["specific advantage 1 with evidence", "advantage 2", "advantage 3"],
+    "weaknesses_vs_competitors": ["specific weakness 1 with evidence", "weakness 2", "weakness 3"],
+    "market_gaps": ["specific gap in the market competitors are not filling", "gap 2", "gap 3"],
+    "positioning_opportunity": "specific positioning recommendation — what angle ${clientName} should own that competitors are not",
+    "keyword_gaps": ["specific high-value keyword competitors rank for that ${clientName} does not"],
+    "content_gaps": ["specific content topics competitors are winning on that ${clientName} should create"]
+  },
+  "review_insights": {
+    "overall_sentiment": "positive|mixed|negative",
+    "avg_rating": "rating if found",
+    "key_themes": ["theme 1", "theme 2", "theme 3"],
+    "trust_signals": ["what builds trust with this audience"],
+    "reputation_risks": ["specific reputation gaps or risks"],
+    "recommendation": "specific action to improve review volume and sentiment"
+  }
+}`;
+
+  return await callClaude(prompt, 1500, false);
+}
+
+async function pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep) {
+  const numPhases = isDeep ? 6 : 3;
+  const prompt = `You are a digital marketing director creating an execution roadmap for ${clientName}.
+
+${ctx}
+
+TASK: Create a specific, prioritised ${numPhases}-phase roadmap and detailed onboarding checklist. Every action must be specific to this business — no generic templates. Order by highest-impact-first within each phase. The checklist should be the literal first 90 days of work.
+
+Return ONLY valid JSON:
+{
+  "roadmap": [
+    {
+      "phase": "Phase 1",
+      "months": "Month 1-2",
+      "label": "Foundation & Quick Wins",
+      "items": [
+        {"task": "specific action", "detail": "why this matters for ${clientName} specifically, expected outcome"},
+        {"task": "specific action 2", "detail": "detail"}
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "phase": "Foundation",
+      "items": [
+        "Set up Google Analytics 4 with purchase/lead conversion events",
+        "Install Meta Pixel + Conversions API",
+        "Connect Google Search Console",
+        "Set up Google Tag Manager"
+      ]
+    },
+    {
+      "phase": "Acquisition",
+      "items": [
+        "specific acquisition task for ${clientName}",
+        "specific task 2"
+      ]
+    },
+    {
+      "phase": "Conversion",
+      "items": ["specific CRO task based on issues found", "specific task 2"]
+    },
+    {
+      "phase": "Retention",
+      "items": ["specific retention task", "specific task 2"]
+    }
+  ],
+  "closing": {
+    "headline": "a specific, commercially compelling headline summarising the opportunity",
+    "narrative": "4-5 sentences: what this diagnostic has revealed, the specific opportunity size, why acting now matters, what the cost of inaction is (use specific numbers where possible)",
+    "next_step": "one specific, concrete next step with a timeframe"
+  }
+}
+
+Rules:
+- ${isDeep ? 'Create all 6 phases, minimum 3 specific actions per phase' : 'Create 3 phases, minimum 3 specific actions per phase'}
+- Every roadmap item must reference something specific about ${clientName}'s situation
+- Checklist items must be in the order an agency would actually do them in week 1-8
+- Closing narrative must mention a specific number (revenue opportunity, traffic gap, conversion rate)`;
+
+  return await callClaude(prompt, 2000, false);
+}
+
+// ─── Claude API helpers ───────────────────────────────────────────────────────
+async function callClaude(prompt, maxTokens, useSearch) {
+  const tools = useSearch ? [{ type: 'web_search_20250305', name: 'web_search' }] : undefined;
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 4000,
-    system: 'You are a world-class brand strategist. Use ALL data provided. Write specific, commercially sharp content. No generic filler. Return ONLY valid JSON.',
-    messages: [{ role: 'user', content: lines.filter(Boolean).join('\n') }]
+    max_tokens: maxTokens || 2000,
+    system: 'You are a world-class brand strategist and growth consultant. Every output is a paid deliverable. Be specific, commercially sharp, and data-driven. Use real numbers. No generic filler. Return ONLY valid JSON — no markdown, no fences, no extra text.',
+    tools: tools,
+    messages: [{ role: 'user', content: prompt }]
   });
-
-  const text = msg.content[0]?.text ?? '{}';
+  const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
   const clean = text.replace(/```[\w]*/g, '').replace(/```/g, '').trim();
   const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
   if (s >= 0 && e > s) return JSON.parse(clean.substring(s, e + 1));
-  throw new Error('Failed to parse analysis JSON');
+  throw new Error('Failed to parse JSON from Claude response');
 }
+
+async function callClaudeWithSearch(prompt, maxTokens) {
+  const msg = await anthropic.messages.create({
+    model: 'claude-sonnet-4-20250514',
+    max_tokens: maxTokens || 1000,
+    system: 'You are a competitive intelligence analyst. Search the web and return specific, actionable findings. Be concise and direct.',
+    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    messages: [{ role: 'user', content: prompt }]
+  });
+  return msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+}
+
 
 app.listen(PORT, () => console.log(`Brand Diagnostic running on port ${PORT}`));
