@@ -744,6 +744,15 @@ function nextSection(){saveCurrentTextareas();if(state.currentSection<sections.l
 function prevSection(){saveCurrentTextareas();if(state.currentSection>0)renderSection(state.currentSection-1);}
 
 function goToGenerate() {
+  // Save ALL sections not just the current one
+  sections.forEach(function(sec, i) {
+    var fields = sec.fields || getFields(sec.id);
+    fields.forEach(function(f) {
+      var key = sec.id + '_' + f.key;
+      var el = document.getElementById(key);
+      if (el && (f.type === 'text' || f.type === 'textarea')) saveAnswer(sec.id, f.key, el.value);
+    });
+  });
   saveCurrentTextareas();
   showScreen('adsUploadScreen');
   document.getElementById('progressWrap').style.display='none';
@@ -797,7 +806,14 @@ function proceedWithGenerate() { startGenerating(); }
 function startGenerating() {
   var biz_url=(state.answers.client||{}).biz_url||'';
   var domain=biz_url.replace('https://','').replace('http://','').split('/')[0].replace('www.','').trim();
-  var clientName=(state.answers.client||{}).biz_name||'Client';
+  var clientName=(state.answers.client||{}).biz_name||(state.answers.client||{}).biz_url||'Client';
+  if (!clientName || clientName === 'Client') {
+    showToast('Please fill in the business name in the Client Details section', 'error');
+    showScreen('questionScreen');
+    document.getElementById('progressWrap').style.display='';
+    renderSection(0);
+    return;
+  }
   document.getElementById('loadingDomain').textContent = 'Pulling live data for '+(domain||clientName)+'...';
   showScreen('loadingScreen');
   document.getElementById('progressWrap').style.display='none';
@@ -812,6 +828,7 @@ function startGenerating() {
       else{el.className='loading-step';if(dot)dot.style.background='';}
     });
   }
+  console.log('Generating for:', domain, clientName, 'mode:', state.mode, 'type:', state.clientType);
   var payload={domain:domain,clientName:clientName,mode:state.mode,bizType:state.clientType,
     agency:{name:state.agency.name,email:state.agency.email,color:state.agency.color,logoUrl:state.agency.logoUrl,logoSessionId:sessionId},
     answers:state.answers, adsReports:adsReports};
@@ -1258,10 +1275,11 @@ app.get('/', (req, res) => {
 
 // ─── Main report generation endpoint ─────────────────────────────────────────
 app.post('/generate', async (req, res) => {
-  const { domain, clientName, mode, bizType, agency, answers, adsReports } = req.body;
-  if (!domain || !clientName) {
-    return res.status(400).json({ error: 'domain and clientName are required' });
-  }
+  let { domain, clientName, mode, bizType, agency, answers, adsReports } = req.body;
+  // Fallbacks if fields are empty
+  domain = (domain || '').trim() || (clientName||'client').toLowerCase().replace(/[^a-z0-9]/g,'-') + '.com';
+  clientName = (clientName || '').trim() || domain || 'Client';
+  // Be lenient - use fallbacks if fields are empty
 
   try {
     res.setHeader('Content-Type', 'text/event-stream');
