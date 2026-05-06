@@ -591,7 +591,7 @@ function getFields(secId) {
       {type:'textarea',key:'persona_ltv',label:'What does a great customer look like?',ph:'How much do they spend? How long do they stay? Do they refer others?'}
     ],
     painpoints:[
-      {type:'textarea',key:'pain_before',label:'What is the customer\\'s life like BEFORE buying?',ph:'What problems, frustrations, failures do they experience?'},
+      {type:'textarea',key:'pain_before',label:'Customer life BEFORE buying',ph:'What problems, frustrations, failures do they experience?'},
       {type:'textarea',key:'pain_dream',label:'What is the dream outcome AFTER buying?',ph:'What transformation do they experience? What does success feel like?'},
       {type:'textarea',key:'pain_trigger',label:'What triggers the buying decision?',ph:'What event, moment or frustration makes them finally take action?'},
       {type:'textarea',key:'pain_alternative',label:'What do they do instead of buying?',ph:'DIY, competitor, do nothing — what are they settling for now?'}
@@ -599,7 +599,7 @@ function getFields(secId) {
     objections:[
       {type:'textarea',key:'obj_main',label:'Top 3 objections from prospects',ph:'Price too high, not the right time, tried it before — what comes up?'},
       {type:'textarea',key:'obj_handle',label:'How are objections currently handled?',ph:'Scripts, guarantees, proof, trials, payment plans?'},
-      {type:'textarea',key:'obj_missing',label:'What objection-handling is MISSING?',ph:'What do they wish they had but don\\'t — case studies, a guarantee, testimonials?'}
+      {type:'textarea',key:'obj_missing',label:'What objection-handling is MISSING?',ph:'What do they wish they had - case studies, a guarantee, testimonials?'}
     ],
     products:[
       {type:'textarea',key:'prod_main',label:'Main products/services and pricing',ph:'List all core offers with prices — what do they actually sell?'},
@@ -673,13 +673,16 @@ function renderSection(idx) {
 function renderField(f, secId) {
   var key = secId+'_'+f.key;
   var html = '<div class="fg"><label class="fl">'+f.label+'</label>';
-  if (f.type==='text') html += '<input class="fi" id="'+key+'" placeholder="'+esc(f.ph||'')+'" onchange="saveAnswer(\\''+secId+'\\',\\''+f.key+'\\',this.value)">';
-  else if (f.type==='textarea') html += '<textarea class="ft" id="'+key+'" placeholder="'+esc(f.ph||'')+'" onchange="saveAnswer(\\''+secId+'\\',\\''+f.key+'\\',this.value)"></textarea>';
-  else if (f.type==='opts') {
+  if (f.type==='text') {
+    html += '<input class="fi" id="'+key+'" placeholder="'+esc(f.ph||'')+'" data-sec="'+secId+'" data-key="'+f.key+'" onchange="saveAnswerEl(this)">';
+  } else if (f.type==='textarea') {
+    html += '<textarea class="ft" id="'+key+'" placeholder="'+esc(f.ph||'')+'" data-sec="'+secId+'" data-key="'+f.key+'" onchange="saveAnswerEl(this)"></textarea>';
+  } else if (f.type==='opts') {
     var cols = f.cols||2;
     html += '<div class="opt-grid cols'+cols+'">';
     f.opts.forEach(function(o){
-      html += '<div class="opt-card" id="opt_'+key+'_'+o.val+'" onclick="selectOpt(\\''+secId+'\\',\\''+f.key+'\\',\\''+o.val+'\\','+(f.multi?'true':'false')+')">'+o.label+'</div>';
+      var multi = f.multi ? 'true' : 'false';
+      html += '<div class="opt-card" id="opt_'+key+'_'+o.val+'" data-sec="'+secId+'" data-key="'+f.key+'" data-val="'+o.val+'" data-multi="'+multi+'" onclick="selectOptEl(this)">'+o.label+'</div>';
     });
     html += '</div>';
   }
@@ -689,6 +692,18 @@ function renderField(f, secId) {
 function saveAnswer(secId, key, val) {
   if (!state.answers[secId]) state.answers[secId] = {};
   state.answers[secId][key] = val;
+}
+function saveAnswerEl(el) {
+  var sec = el.getAttribute('data-sec');
+  var key = el.getAttribute('data-key');
+  saveAnswer(sec, key, el.value);
+}
+function selectOptEl(el) {
+  var sec = el.getAttribute('data-sec');
+  var key = el.getAttribute('data-key');
+  var val = el.getAttribute('data-val');
+  var multi = el.getAttribute('data-multi') === 'true';
+  selectOpt(sec, key, val, multi);
 }
 function selectOpt(secId, key, val, multi) {
   if (!state.answers[secId]) state.answers[secId] = {};
@@ -828,7 +843,10 @@ function startGenerating() {
 
 function showErrScreen(msg){
   showScreen('loadingScreen');
-  document.querySelector('.loading-wrap').innerHTML='<h3 style="color:var(--danger);margin-bottom:12px">Error generating report</h3><p style="color:var(--text2);margin-bottom:20px">'+esc(msg)+'</p><button class="btn-next" onclick="showScreen(\\'questionScreen\\');document.getElementById(\\'progressWrap\\').style.display=\\'\\';">← Back to questionnaire</button>';
+  var wrap = document.querySelector('.loading-wrap');
+  wrap.innerHTML='<h3 style="color:var(--danger);margin-bottom:12px">Error generating report</h3><p style="color:var(--text2);margin-bottom:20px">'+esc(msg)+'</p><button class="btn-next" id="errBackBtn">Back to questionnaire</button>';
+  var btn = document.getElementById('errBackBtn');
+  if (btn) btn.onclick = function(){ showScreen('questionScreen'); document.getElementById('progressWrap').style.display=''; };
 }
 
 function renderReport(report, ahrefs, clientName, domain, ag, research) {
@@ -872,7 +890,7 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
     +'<div><div style="font-size:14px;font-weight:700;color:rgba(255,255,255,.8)">'+esc(agencyName)+'</div></div></div>'
     +'<div style="position:relative;z-index:2">'
     +'<div style="font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:12px">Brand Diagnostic Report</div>'
-    +'<div style="font-family:\\'DM Serif Display\\',serif;font-size:48px;font-weight:900;color:#fff;line-height:1;margin-bottom:8px">Brand<br>Diagnostic</div>'
+    +'<div style="font-family:DM Serif Display,serif;font-size:48px;font-weight:900;color:#fff;line-height:1;margin-bottom:8px">Brand<br>Diagnostic</div>'
     +'<div style="width:48px;height:4px;background:rgba(255,255,255,.4);border-radius:99px;margin-bottom:20px"></div>'
     +'<div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:4px">Prepared for</div>'
     +'<div style="font-size:30px;font-weight:800;color:#fff">'+esc(clientName)+'</div>'
@@ -1131,7 +1149,7 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
     var phColor=phaseColors[ph]||color;
     chkHtml+='<li style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:'+phColor+';margin:14px 0 6px;padding-bottom:4px;border-bottom:1px solid '+phColor+'22">'+esc(ph)+'</li>';
     (chkGroups[ph]||[]).forEach(function(task){
-      chkHtml+='<li class="r-chk-item" onclick="this.classList.toggle(\\'checked\\')">\<div class="r-chk-box">✓</div><span class="r-chk-text">'+esc(task)+'</span></li>';
+      chkHtml+='<li class="r-chk-item" data-chk="1"><div class="r-chk-box">✓</div><span class="r-chk-text">'+esc(task)+'</span></li>';
     });
   });
   if(chkOrder.length===0){chkHtml+='<li style="color:#999;font-size:13px;padding:10px 0">No checklist data available.</li>';}
@@ -1143,7 +1161,7 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
   slides.push(lightSlide('Next Steps',
     tag('Closing Recommendation')+title('The Single Most Important Next Step')
     +'<div style="background:'+color+';border-radius:12px;padding:28px;margin-bottom:20px">'
-    +(cl.headline?'<div style="font-family:\\'DM Serif Display\\',serif;font-size:20px;color:#fff;margin-bottom:12px">'+esc(cl.headline)+'</div>':'')
+    +(cl.headline?'<div style="font-family:DM Serif Display,serif;font-size:20px;color:#fff;margin-bottom:12px">'+esc(cl.headline)+'</div>':'')
     +'<div style="font-size:15px;color:rgba(255,255,255,.9);line-height:1.7">'+esc(cl.narrative||report.closing||'')+'</div>'
     +(cl.next_step?'<div style="margin-top:16px;background:rgba(255,255,255,.15);border-radius:8px;padding:12px 16px;font-size:14px;font-weight:700;color:#fff">Next Step: '+esc(cl.next_step)+'</div>':'')
     +'</div>'
@@ -1166,6 +1184,12 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
   var slidesHtml='';
   slides.forEach(function(s,i){slidesHtml+='<div class="slide'+(i===0?' active':'')+'" id="slide_'+i+'">'+s.html+'</div>';});
   document.getElementById('slidesWrap').innerHTML=slidesHtml;
+
+  // Event delegation for checklist items
+  document.getElementById('slidesWrap').addEventListener('click', function(e) {
+    var item = e.target.closest('[data-chk]');
+    if (item) item.classList.toggle('checked');
+  });
 
   showScreen('reportScreen');
 }
