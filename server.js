@@ -29,7 +29,18 @@ app.get('/logo/:sessionId', (req, res) => {
   res.send(Buffer.from(match[2], 'base64'));
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, version: '2.0.0' }));
+// ─── Ads report storage ──────────────────────────────────────────────────────
+const adsReportStore = {};
+
+app.post('/upload-ads-report', (req, res) => {
+  const { reportData, reportType, sessionId } = req.body;
+  if (!reportData || !sessionId) return res.status(400).json({ error: 'Missing data' });
+  if (!adsReportStore[sessionId]) adsReportStore[sessionId] = {};
+  adsReportStore[sessionId][reportType] = reportData;
+  res.json({ ok: true, type: reportType, rows: reportData.length });
+});
+
+app.get('/health', (req, res) => res.json({ ok: true, version: '2.1.0' }));
 
 
 const TOOL_HTML = `<!DOCTYPE html>
@@ -275,6 +286,88 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
 <div id="questionScreen" class="screen">
   <div id="tabsBar" class="tabs"></div>
   <div class="main" id="sectionContent"></div>
+</div>
+
+<!-- ADS UPLOAD -->
+<div id="adsUploadScreen" class="screen">
+  <div style="max-width:720px;margin:48px auto;padding:0 28px">
+    <div style="font-size:13px;color:var(--text3);cursor:pointer;margin-bottom:20px" onclick="backToQuestionnaire()">← Back to questionnaire</div>
+    <div style="font-family:'DM Serif Display',serif;font-size:28px;color:#fff;margin-bottom:8px">Upload Ads Reports</div>
+    <div style="font-size:14px;color:var(--text2);margin-bottom:8px">Upload your Meta Ads or Google Ads CSV exports for a detailed account audit. This is optional — skip to generate the report without it.</div>
+    <div style="font-size:12px;color:var(--text3);margin-bottom:32px">Export from: Meta Ads Manager → Reports → Export CSV &nbsp;|&nbsp; Google Ads → Reports → Download</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:28px">
+      <!-- Meta Ads Upload -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <div style="width:36px;height:36px;border-radius:8px;background:#1877f2;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">f</div>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:#fff">Meta Ads</div>
+            <div style="font-size:12px;color:var(--text3)">Facebook & Instagram</div>
+          </div>
+        </div>
+        <div id="metaUploadArea" style="border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:border-color .2s" onclick="document.getElementById('metaFileInput').click()" ondragover="handleDragOver(event)" ondrop="handleDrop(event,'meta')">
+          <input type="file" id="metaFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleAdsUpload(event,'meta')">
+          <div id="metaUploadContent">
+            <div style="font-size:28px;margin-bottom:8px">📊</div>
+            <div style="font-size:13px;color:var(--text2)">Drop CSV here or click to upload</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:4px">Meta Ads Manager export (.csv)</div>
+          </div>
+        </div>
+        <div id="metaStatus" style="margin-top:10px;font-size:12px;color:var(--text3)"></div>
+      </div>
+
+      <!-- Google Ads Upload -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+          <div style="width:36px;height:36px;border-radius:8px;background:#4285f4;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;color:#fff;flex-shrink:0">G</div>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:#fff">Google Ads</div>
+            <div style="font-size:12px;color:var(--text3)">Search, Display & Shopping</div>
+          </div>
+        </div>
+        <div id="googleUploadArea" style="border:2px dashed var(--border);border-radius:8px;padding:20px;text-align:center;cursor:pointer;transition:border-color .2s" onclick="document.getElementById('googleFileInput').click()" ondragover="handleDragOver(event)" ondrop="handleDrop(event,'google')">
+          <input type="file" id="googleFileInput" accept=".csv,.xlsx,.xls" style="display:none" onchange="handleAdsUpload(event,'google')">
+          <div id="googleUploadContent">
+            <div style="font-size:28px;margin-bottom:8px">📊</div>
+            <div style="font-size:13px;color:var(--text2)">Drop CSV here or click to upload</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:4px">Google Ads report (.csv)</div>
+          </div>
+        </div>
+        <div id="googleStatus" style="margin-top:10px;font-size:12px;color:var(--text3)"></div>
+      </div>
+    </div>
+
+    <!-- Instructions -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:28px">
+      <div style="font-size:12px;font-weight:700;color:#fff;margin-bottom:12px;text-transform:uppercase;letter-spacing:.05em">How to export your reports</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#1877f2;margin-bottom:6px">Meta Ads Manager</div>
+          <ol style="font-size:12px;color:var(--text2);line-height:1.8;padding-left:16px">
+            <li>Open Ads Manager → Reports</li>
+            <li>Select date range (last 90 days)</li>
+            <li>Click Export → CSV</li>
+            <li>Include: Campaign, Ad Set, Spend, Results, ROAS, CTR, CPC, CPM</li>
+          </ol>
+        </div>
+        <div>
+          <div style="font-size:12px;font-weight:600;color:#4285f4;margin-bottom:6px">Google Ads</div>
+          <ol style="font-size:12px;color:var(--text2);line-height:1.8;padding-left:16px">
+            <li>Open Google Ads → Reports</li>
+            <li>Create or open a Campaign report</li>
+            <li>Set date range (last 90 days)</li>
+            <li>Download → CSV</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;justify-content:space-between">
+      <button class="btn-back" onclick="skipAdsUpload()">Skip — Generate without ads data</button>
+      <button class="btn-next" onclick="proceedWithGenerate()">Generate Report →</button>
+    </div>
+  </div>
 </div>
 
 <!-- LOADING -->
@@ -637,10 +730,60 @@ function prevSection(){saveCurrentTextareas();if(state.currentSection>0)renderSe
 
 function goToGenerate() {
   saveCurrentTextareas();
+  showScreen('adsUploadScreen');
+  document.getElementById('progressWrap').style.display='none';
+}
+
+var adsReports = {};
+
+function handleDragOver(e) { e.preventDefault(); }
+function handleDrop(e, platform) { e.preventDefault(); var file = e.dataTransfer.files[0]; if (file) processAdsFile(file, platform); }
+function handleAdsUpload(e, platform) { var file = e.target.files[0]; if (file) processAdsFile(file, platform); }
+
+function processAdsFile(file, platform) {
+  var statusEl = document.getElementById(platform+'Status');
+  var areaEl = document.getElementById(platform+'UploadArea');
+  var contentEl = document.getElementById(platform+'UploadContent');
+  statusEl.textContent = 'Reading file...'; statusEl.style.color = 'var(--warn)';
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    var rows = parseCSV(ev.target.result);
+    if (rows.length < 2) { statusEl.textContent = 'File appears empty'; statusEl.style.color = 'var(--danger)'; return; }
+    adsReports[platform] = rows;
+    fetch('/upload-ads-report', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({reportData:rows, reportType:platform, sessionId:sessionId})
+    }).then(function(r){return r.json();}).then(function(d){
+      contentEl.innerHTML = '<div style="font-size:24px;margin-bottom:8px">✅</div><div style="font-size:13px;color:var(--accent);font-weight:600">'+file.name+'</div><div style="font-size:11px;color:var(--text3);margin-top:4px">'+d.rows+' rows loaded</div>';
+      areaEl.style.borderColor='var(--accent)'; areaEl.style.borderStyle='solid';
+      statusEl.textContent = d.rows+' rows ready'; statusEl.style.color='var(--accent)';
+    }).catch(function(e){ statusEl.textContent='Upload failed'; statusEl.style.color='var(--danger)'; });
+  };
+  reader.readAsText(file);
+}
+
+function parseCSV(text) {
+  var lines = text.split(/\r?\n/).filter(function(l){return l.trim();});
+  if (!lines.length) return [];
+  var headers = lines[0].split(',').map(function(h){return h.replace(/^"|"$/g,'').trim();});
+  var rows = [];
+  for (var i=1; i<Math.min(lines.length,500); i++) {
+    var vals = lines[i].match(/(".*?"|[^,]+)(?=,|$)/g)||lines[i].split(',');
+    var row = {};
+    headers.forEach(function(h,j){row[h]=(vals[j]||'').replace(/^"|"$/g,'').trim();});
+    rows.push(row);
+  }
+  return rows;
+}
+
+function skipAdsUpload() { adsReports={}; startGenerating(); }
+function proceedWithGenerate() { startGenerating(); }
+
+function startGenerating() {
   var biz_url=(state.answers.client||{}).biz_url||'';
-  var domain=biz_url.replace(/https?:\\/\\//,'').replace(/\\/.*$/,'').replace(/^www\\./,'').trim();
+  var domain=biz_url.replace(/https?:\/\//,'').replace(/\/.*$/,'').replace(/^www\./,'').trim();
   var clientName=(state.answers.client||{}).biz_name||'Client';
-  document.getElementById('loadingDomain').textContent = 'Pulling live data for ' + (domain||clientName) + '...';
+  document.getElementById('loadingDomain').textContent = 'Pulling live data for '+(domain||clientName)+'...';
   showScreen('loadingScreen');
   document.getElementById('progressWrap').style.display='none';
   function setProgress(pct){
@@ -656,7 +799,8 @@ function goToGenerate() {
   }
   var payload={domain:domain,clientName:clientName,mode:state.mode,bizType:state.clientType,
     agency:{name:state.agency.name,email:state.agency.email,color:state.agency.color,logoUrl:state.agency.logoUrl,logoSessionId:sessionId},
-    answers:state.answers};
+    answers:state.answers, adsReports:adsReports};
+
   fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
   .then(function(resp){
     if(!resp.ok)throw new Error('Server error '+resp.status);
@@ -665,7 +809,7 @@ function goToGenerate() {
       reader.read().then(function(r){
         if(r.done)return;
         buf+=dec.decode(r.value,{stream:true});
-        var parts=buf.split('\\n\\n');buf=parts.pop();
+        var parts=buf.split('\n\n');buf=parts.pop();
         parts.forEach(function(part){
           if(!part.startsWith('data: '))return;
           try{
@@ -681,6 +825,7 @@ function goToGenerate() {
     pump();
   }).catch(function(err){showErrScreen(err.message);});
 }
+
 function showErrScreen(msg){
   showScreen('loadingScreen');
   document.querySelector('.loading-wrap').innerHTML='<h3 style="color:var(--danger);margin-bottom:12px">Error generating report</h3><p style="color:var(--text2);margin-bottom:20px">'+esc(msg)+'</p><button class="btn-next" onclick="showScreen(\\'questionScreen\\');document.getElementById(\\'progressWrap\\').style.display=\\'\\';">← Back to questionnaire</button>';
@@ -822,6 +967,62 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
     +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px"><span style="font-size:13px;color:#333">Offer Strength:</span>'+pill((res.offer_strength||'unknown').toUpperCase(),res.offer_strength==='strong'?'ok':res.offer_strength==='moderate'?'warn':'bad')+'</div>'
     +'<p style="font-size:13px;color:#444;line-height:1.6">'+esc(res.offer_analysis)+'</p></div>':'')
   ));
+
+  // SLIDE 5b: PAID ADS ACCOUNT AUDIT (only if ads data was uploaded)
+  if (report.ads_analysis && report.ads_analysis.overall_grade) {
+    var aa = report.ads_analysis;
+    var gradeColor = {A:color,B:'#16a34a',C:'#d97706',D:'#ea580c',F:'#dc2626'}[aa.overall_grade]||'#d97706';
+    var adsSlideHtml = tag('Paid Ads Account Audit') + title('Ads Performance Deep-Dive')
+      + '<div style="display:grid;grid-template-columns:120px 1fr;gap:20px;margin-bottom:20px">'
+      + '<div style="background:#f8f9fa;border-radius:12px;padding:20px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center">'
+      + '<div style="font-size:56px;font-weight:900;color:'+gradeColor+'">'+esc(aa.overall_grade||'?')+'</div>'
+      + '<div style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.06em;margin-top:4px">Account Grade</div>'
+      + '</div>'
+      + '<div><p style="font-size:13px;color:#444;line-height:1.7;margin-bottom:12px">'+esc(aa.overall_summary||'')+'</p>'
+      + '<div style="display:flex;gap:10px;flex-wrap:wrap">'
+      + (aa.total_spend_period?'<div class="r-metric" style="flex:1;min-width:100px"><div class="r-metric-label">Total Spend</div><div class="r-metric-val" style="font-size:16px">'+esc(aa.total_spend_period)+'</div></div>':'')
+      + (aa.overall_roas?'<div class="r-metric" style="flex:1;min-width:100px"><div class="r-metric-label">Overall ROAS</div><div class="r-metric-val" style="font-size:16px;color:'+color+'">'+esc(aa.overall_roas)+'</div></div>':'')
+      + (aa.total_revenue_period?'<div class="r-metric" style="flex:1;min-width:100px"><div class="r-metric-label">Revenue</div><div class="r-metric-val" style="font-size:16px">'+esc(aa.total_revenue_period)+'</div></div>':'')
+      + '</div></div></div>';
+
+    // Critical issues
+    if (aa.critical_issues && aa.critical_issues.length) {
+      adsSlideHtml += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#dc2626;margin-bottom:8px">Critical Issues</div>';
+      aa.critical_issues.forEach(function(issue) {
+        adsSlideHtml += '<div style="background:#fef2f2;border-left:4px solid #dc2626;border-radius:6px;padding:12px 14px;margin-bottom:8px">'
+          + '<div style="font-size:13px;font-weight:700;color:#dc2626;margin-bottom:4px">'+esc(issue.issue||'')+'</div>'
+          + (issue.impact?'<div style="font-size:12px;color:#888;margin-bottom:4px">Impact: '+esc(issue.impact)+'</div>':'')
+          + (issue.fix?'<div style="font-size:12px;color:#333;font-weight:600">Fix: '+esc(issue.fix)+'</div>':'')
+          + '</div>';
+      });
+    }
+
+    // Platform breakdown
+    var platforms = [];
+    if (aa.meta_ads && aa.meta_ads.present !== false) platforms.push({name:'Meta Ads', color:'#1877f2', data:aa.meta_ads});
+    if (aa.google_ads && aa.google_ads.present !== false) platforms.push({name:'Google Ads', color:'#4285f4', data:aa.google_ads});
+    if (platforms.length) {
+      adsSlideHtml += '<div style="display:grid;grid-template-columns:'+( platforms.length>1?'1fr 1fr':'1fr')+';gap:14px;margin-top:14px">';
+      platforms.forEach(function(p) {
+        var pd = p.data;
+        adsSlideHtml += '<div style="background:#f8f9fa;border-radius:10px;padding:16px;border-top:3px solid '+p.color+'">'
+          + '<div style="font-size:12px;font-weight:700;color:'+p.color+';margin-bottom:10px">'+p.name+'</div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">'
+          + (pd.spend?'<div style="text-align:center"><div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.04em">Spend</div><div style="font-size:14px;font-weight:700;color:#111">'+esc(pd.spend)+'</div></div>':'')
+          + (pd.roas?'<div style="text-align:center"><div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.04em">ROAS</div><div style="font-size:14px;font-weight:700;color:'+color+'">'+esc(pd.roas)+'</div></div>':'')
+          + (pd.ctr?'<div style="text-align:center"><div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.04em">CTR</div><div style="font-size:14px;font-weight:700;color:#111">'+esc(pd.ctr)+'</div></div>':'')
+          + '</div>'
+          + (pd.best_performing?'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#16a34a;margin-bottom:4px">Best</div><div style="font-size:12px;color:#333;margin-bottom:8px">'+esc(pd.best_performing)+'</div>':'')
+          + (pd.budget_waste?'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#dc2626;margin-bottom:4px">Wasted Budget</div><div style="font-size:12px;color:#333;margin-bottom:8px">'+esc(pd.budget_waste)+'</div>':'')
+          + (pd.quick_wins&&pd.quick_wins.length?'<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:'+color+';margin-bottom:4px">Quick Wins</div>'
+          + pd.quick_wins.map(function(qw){return '<div style="font-size:12px;color:#333;padding:2px 0">→ '+esc(qw)+'</div>';}).join(''):'')
+          + '</div>';
+      });
+      adsSlideHtml += '</div>';
+    }
+
+    slides.push(lightSlide('Ads Audit', adsSlideHtml));
+  }
 
   // SLIDE 6: ADS & REVIEWS AUDIT
   var adsRunning = res.ads_running===true||res.ads_running==='true';
@@ -1011,7 +1212,8 @@ function downloadHTML(){
 }
 function showScreen(id){document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('active');});document.getElementById(id).classList.add('active');}
 function showToast(msg,type){var t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+(type||'');setTimeout(function(){t.classList.remove('show');},3000);}
-function esc(s){if(!s)return '';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function stripTags(s){if(!s)return '';return String(s).replace(/<cite[^>]*>.*?<\/cite>/gi,'').replace(/<[^>]+>/g,'').replace(/\s{2,}/g,' ').trim();}
+function esc(s){if(!s)return '';return stripTags(String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function shadeColor(hex,pct){var num=parseInt(hex.replace('#',''),16);var r=Math.min(255,Math.max(0,(num>>16)+pct));var g=Math.min(255,Math.max(0,((num>>8)&0xff)+pct));var b=Math.min(255,Math.max(0,(num&0xff)+pct));return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);}
 function hexRgba(hex,alpha){var num=parseInt(hex.replace('#',''),16);return 'rgba('+((num>>16)&255)+','+((num>>8)&255)+','+(num&255)+','+alpha+')';}
 document.addEventListener('keydown',function(e){
@@ -1032,7 +1234,7 @@ app.get('/', (req, res) => {
 
 // ─── Main report generation endpoint ─────────────────────────────────────────
 app.post('/generate', async (req, res) => {
-  const { domain, clientName, mode, bizType, agency, answers } = req.body;
+  const { domain, clientName, mode, bizType, agency, answers, adsReports } = req.body;
   if (!domain || !clientName) {
     return res.status(400).json({ error: 'domain and clientName are required' });
   }
@@ -1100,7 +1302,7 @@ app.post('/generate', async (req, res) => {
     const research = await webResearch(clientName, domain);
 
     send('progress', { msg: 'Running AI analysis (5 parallel passes)...', pct: 82 });
-    const report = await runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers);
+    const report = await runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers, adsReports || {});
     report.web_research = research;
 
     send('progress', { msg: 'Done', pct: 100 });
@@ -1161,7 +1363,7 @@ async function webResearch(clientName, domain) {
     const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
     const clean = text.replace(/```[\w]*/g, '').replace(/```/g, '').trim();
     const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
-    if (s >= 0 && e > s) return JSON.parse(clean.substring(s, e + 1));
+    if (s >= 0 && e > s) return stripCites(JSON.parse(clean.substring(s, e + 1)));
   } catch (err) {
     console.warn('Web research failed:', err.message);
   }
@@ -1179,7 +1381,7 @@ async function webResearch(clientName, domain) {
 // ─── Multi-pass AI Analysis Engine ───────────────────────────────────────────
 // Each pass focuses deeply on one area. Results are combined into a rich report.
 
-async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers) {
+async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers, adsReports) {
   const q = answers || {};
   const isDeep = mode === 'deep';
 
@@ -1187,18 +1389,22 @@ async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, 
   const ctx = buildContext(clientName, domain, bizType, ahrefs, research, q);
 
   // Run passes in parallel where possible
+  const hasAdsData = adsReports && (adsReports.meta || adsReports.google);
+
   const [
     execAndScores,
     gapAndForecast,
     personaAndOffer,
     competitorIntel,
-    roadmapAndChecklist
+    roadmapAndChecklist,
+    adsAnalysis
   ] = await Promise.all([
     pass_execAndScores(ctx, clientName, domain, ahrefs, research, isDeep),
     pass_gapAndForecast(ctx, clientName, ahrefs, research, isDeep),
     pass_personaAndOffer(ctx, clientName, research, q, isDeep),
     pass_competitorIntel(ctx, clientName, domain, ahrefs, research, isDeep),
-    pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep)
+    pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep),
+    hasAdsData ? pass_adsAnalysis(ctx, clientName, adsReports, ahrefs) : Promise.resolve({ads_analysis: null})
   ]);
 
   // Merge all passes into one report object
@@ -1207,8 +1413,27 @@ async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, 
     ...gapAndForecast,
     ...personaAndOffer,
     ...competitorIntel,
-    ...roadmapAndChecklist
+    ...roadmapAndChecklist,
+    ...adsAnalysis
   };
+}
+
+// Strip XML/cite tags that web search injects into responses
+function stripCites(obj) {
+  if (typeof obj === 'string') {
+    return obj
+      .replace(/<cite[^>]*>.*?<\/cite>/gi, '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+  if (Array.isArray(obj)) return obj.map(stripCites).filter(Boolean);
+  if (obj && typeof obj === 'object') {
+    const out = {};
+    for (const k of Object.keys(obj)) out[k] = stripCites(obj[k]);
+    return out;
+  }
+  return obj;
 }
 
 function buildContext(clientName, domain, bizType, ahrefs, research, q) {
@@ -1481,6 +1706,83 @@ Rules:
   return await callClaude(prompt, 2000, false);
 }
 
+async function pass_adsAnalysis(ctx, clientName, adsReports, ahrefs) {
+  const metaData = adsReports.meta ? JSON.stringify(adsReports.meta).slice(0, 8000) : null;
+  const googleData = adsReports.google ? JSON.stringify(adsReports.google).slice(0, 8000) : null;
+
+  const platformSummaries = [];
+  if (metaData) platformSummaries.push(`META ADS DATA:\n${metaData}`);
+  if (googleData) platformSummaries.push(`GOOGLE ADS DATA:\n${googleData}`);
+
+  const prompt = `You are a world-class paid media analyst. Analyse the following ads account data for ${clientName} and produce a detailed audit.
+
+BUSINESS CONTEXT:
+${ctx}
+
+ADS ACCOUNT DATA:
+${platformSummaries.join('\n\n')}
+
+LIVE AHREFS PAID DATA:
+Paid traffic: ${ahrefs.paid_traffic || 0} | Paid keywords: ${ahrefs.paid_keywords || 0}
+
+TASK: Produce a comprehensive paid ads audit. Identify what is working, what is wasting budget, and specific optimisation opportunities. Calculate key metrics if not provided. Be specific with numbers from the data.
+
+Return ONLY valid JSON:
+{
+  "ads_analysis": {
+    "overall_grade": "A|B|C|D|F",
+    "overall_summary": "4-5 sentences on overall account health, key strengths and critical issues",
+    "platforms_analysed": ["Meta Ads", "Google Ads"],
+    "total_spend_period": "total spend identified in the data",
+    "total_revenue_period": "total revenue/conversions identified",
+    "overall_roas": "calculated ROAS",
+    "meta_ads": {
+      "present": true,
+      "spend": "spend found in data",
+      "revenue": "revenue/value found",
+      "roas": "calculated",
+      "cpc": "cost per click",
+      "ctr": "click through rate",
+      "cpm": "cost per 1000 impressions",
+      "best_performing": "description of best performing campaign/ad set",
+      "worst_performing": "description of worst performing — wasted budget",
+      "audience_assessment": "assessment of targeting quality",
+      "creative_assessment": "assessment of ad creative quality based on CTR/engagement",
+      "budget_waste": "estimated monthly budget being wasted and why",
+      "quick_wins": ["specific optimisation 1", "specific optimisation 2", "specific optimisation 3"]
+    },
+    "google_ads": {
+      "present": true,
+      "spend": "spend found",
+      "revenue": "revenue found",
+      "roas": "calculated",
+      "quality_score_avg": "average quality score if available",
+      "impression_share": "impression share if available",
+      "best_performing": "best campaign/keyword",
+      "worst_performing": "wasted spend",
+      "keyword_assessment": "are they targeting the right keywords?",
+      "budget_waste": "estimated monthly waste",
+      "quick_wins": ["optimisation 1", "optimisation 2", "optimisation 3"]
+    },
+    "critical_issues": [
+      {"issue": "specific critical issue", "impact": "estimated monthly cost of this issue", "fix": "specific action to resolve"}
+    ],
+    "optimisation_roadmap": [
+      {"priority": 1, "action": "specific action", "expected_impact": "e.g. +15% ROAS", "timeframe": "1 week"}
+    ],
+    "benchmark_comparison": {
+      "industry_avg_roas": "industry benchmark",
+      "your_roas": "their ROAS",
+      "roas_gap": "the gap",
+      "industry_avg_ctr": "benchmark",
+      "your_ctr": "their CTR"
+    }
+  }
+}`;
+
+  return await callClaude(prompt, 3000, false);
+}
+
 // ─── Claude API helpers ───────────────────────────────────────────────────────
 async function callClaude(prompt, maxTokens, useSearch) {
   const tools = useSearch ? [{ type: 'web_search_20250305', name: 'web_search' }] : undefined;
@@ -1494,7 +1796,7 @@ async function callClaude(prompt, maxTokens, useSearch) {
   const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
   const clean = text.replace(/```[\w]*/g, '').replace(/```/g, '').trim();
   const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
-  if (s >= 0 && e > s) return JSON.parse(clean.substring(s, e + 1));
+  if (s >= 0 && e > s) return stripCites(JSON.parse(clean.substring(s, e + 1)));
   throw new Error('Failed to parse JSON from Claude response');
 }
 
