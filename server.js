@@ -3,17 +3,15 @@ const cors = require('cors');
 const Anthropic = require('@anthropic-ai/sdk');
 
 const app = express();
-app.use(express.json({ limit: '10mb' })); // increased for logo uploads
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const AHREFS_API_KEY = process.env.AHREFS_API_KEY;
 const PORT = process.env.PORT || 3000;
 
-// ─── Logo storage (in-memory, resets on redeploy — good enough for now) ─────
 const logoStore = {};
 
-// ─── Logo upload endpoint ────────────────────────────────────────────────────
 app.post('/upload-logo', (req, res) => {
   const { logoData, sessionId } = req.body;
   if (!logoData || !sessionId) return res.status(400).json({ error: 'Missing logoData or sessionId' });
@@ -25,1319 +23,1360 @@ app.post('/upload-logo', (req, res) => {
 app.get('/logo/:sessionId', (req, res) => {
   const data = logoStore[req.params.sessionId];
   if (!data) return res.status(404).send('Not found');
-  // data is a base64 data URL like "data:image/png;base64,..."
   const match = data.match(/^data:([^;]+);base64,(.+)$/);
   if (!match) return res.status(400).send('Invalid data');
   res.setHeader('Content-Type', match[1]);
   res.send(Buffer.from(match[2], 'base64'));
 });
 
-// ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/health', (req, res) => res.json({ ok: true, version: '2.0.0' }));
 
-// ─── Serve the Brand Diagnostic tool ─────────────────────────────────────────
+
 const TOOL_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Brand Diagnostic Tool</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet">
 <style>
+:root {
+  --bg:#060a0f;--surface:#0f1419;--surface2:#161d26;--border:#1e2a38;
+  --accent:#3cc168;--text:#f0f4f8;--text2:#8899aa;--text3:#4a5f72;
+  --field-bg:#1a2330;--danger:#e84545;--warn:#f0a500;--radius:12px;
+}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:'Inter',sans-serif;background:#071a0e;color:#fff;min-height:100vh}
-:root{--green:#3cc168;--green-light:#a8ffd0;--green-dim:#1a5c35;--card:#0e2618;--field:#162b1f;--border:#1e4a2a;--muted:#6b8f74}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh}
 
-.topbar{background:#050f09;border-bottom:1px solid var(--border);padding:0 32px;display:flex;align-items:center;justify-content:space-between;height:60px;position:sticky;top:0;z-index:100}
-.topbar-brand{display:flex;align-items:center;gap:12px;cursor:pointer}
-.topbar-logo{width:36px;height:36px;border-radius:8px;background:var(--green);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#071a0e;overflow:hidden;flex-shrink:0}
-.topbar-logo img{width:100%;height:100%;object-fit:cover;border-radius:8px}
-.topbar-name{font-weight:600;font-size:15px}
-.topbar-right{display:flex;align-items:center;gap:16px}
-.mode-badge{padding:4px 12px;border-radius:20px;font-size:12px;font-weight:600;letter-spacing:.05em;text-transform:uppercase}
-.mode-quick{background:#0d3320;color:var(--green-light);border:1px solid var(--green-dim)}
-.mode-deep{background:#1a1a0d;color:#ffd580;border:1px solid #4a4a0d}
+/* TOPBAR */
+.topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:0 28px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.tb-left{display:flex;align-items:center;gap:10px}
+.agency-logo{width:34px;height:34px;border-radius:8px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:#fff;overflow:hidden;flex-shrink:0}
+.agency-logo img{width:100%;height:100%;object-fit:cover}
+.tb-name{font-weight:600;font-size:14px}
+.tb-badge{font-size:11px;padding:2px 8px;border-radius:20px;background:rgba(60,193,104,.15);color:var(--accent);font-weight:600;letter-spacing:.04em}
+.progress-wrap{flex:1;max-width:280px;margin:0 24px}
+.progress-bar{height:3px;background:var(--border);border-radius:99px;overflow:hidden}
+.progress-fill{height:100%;background:var(--accent);border-radius:99px;transition:width .4s ease}
+.progress-label{font-size:11px;color:var(--text3);margin-top:5px}
 
-.tabs-wrap{background:#050f09;border-bottom:1px solid var(--border);padding:0 32px;overflow-x:auto;white-space:nowrap}
-.tabs{display:inline-flex;gap:0}
-.tab{padding:14px 18px;font-size:12px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;letter-spacing:.03em;white-space:nowrap}
+/* TABS */
+.tabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto;scrollbar-width:none;padding:0 28px;gap:2px}
+.tab{padding:13px 14px;font-size:11px;font-weight:600;color:var(--text3);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;transition:all .2s;letter-spacing:.05em;text-transform:uppercase;display:flex;align-items:center;gap:5px}
 .tab:hover{color:#fff}
-.tab.active{color:var(--green-light);border-bottom-color:var(--green-light)}
-.tab.done{color:var(--green)}
+.tab.active{color:#fff;border-color:var(--accent)}
+.tab.done{color:var(--accent)}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--border);flex-shrink:0}
+.tab.done .dot{background:var(--accent)}
+.tab.active .dot{background:var(--accent);box-shadow:0 0 5px var(--accent)}
 
-.main{max-width:760px;margin:0 auto;padding:40px 24px 80px}
-.section-header{margin-bottom:32px}
-.section-num{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:50%;background:var(--green);color:#071a0e;font-weight:700;font-size:13px;margin-bottom:12px}
-.section-title{font-size:24px;font-weight:700;color:#fff;margin-bottom:6px}
-.section-sub{font-size:14px;color:var(--muted)}
+/* SCREENS */
+.screen{display:none}
+.screen.active{display:block}
 
-.field{margin-bottom:24px}
-.field label{display:block;font-size:13px;font-weight:500;color:#fff;margin-bottom:8px;letter-spacing:.02em}
-.field input,.field textarea,.field select{width:100%;background:var(--field);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:14px;color:#fff;font-family:'Inter',sans-serif;outline:none;transition:border-color .15s}
-.field input::placeholder,.field textarea::placeholder{color:var(--muted)}
-.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--green)}
-.field select option{background:#0e2618}
-.field textarea{min-height:80px;resize:vertical}
+/* MODE SELECT */
+.mode-wrap{max-width:680px;margin:60px auto;padding:0 28px;text-align:center}
+.mode-title{font-family:'DM Serif Display',serif;font-size:32px;color:#fff;margin-bottom:10px}
+.mode-sub{font-size:15px;color:var(--text2);margin-bottom:40px}
+.mode-cards{display:grid;grid-template-columns:1fr 1fr;gap:16px;text-align:left}
+.mode-card{background:var(--surface);border:2px solid var(--border);border-radius:var(--radius);padding:28px;cursor:pointer;transition:all .25s}
+.mode-card:hover,.mode-card.selected{border-color:var(--accent);background:var(--surface2)}
+.mode-card-badge{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+.mode-card-title{font-size:20px;font-weight:700;color:#fff;margin-bottom:6px}
+.mode-card-price{font-size:22px;font-weight:700;color:var(--accent);margin-bottom:12px}
+.mode-card-desc{font-size:13px;color:var(--text2);line-height:1.6;margin-bottom:16px}
+.mode-card-list{list-style:none}
+.mode-card-list li{font-size:13px;color:var(--text2);padding:4px 0;display:flex;gap:8px}
+.mode-card-list li::before{content:'→';color:var(--accent);flex-shrink:0}
+.mode-start-btn{margin-top:32px;background:var(--accent);color:#fff;border:none;padding:14px 40px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.04em;text-transform:uppercase}
+.mode-start-btn:disabled{opacity:.4;cursor:not-allowed}
 
+/* MAIN LAYOUT */
+.main{max-width:820px;margin:0 auto;padding:40px 28px 80px}
+
+/* SECTION HEADER */
+.sec-hd{margin-bottom:28px}
+.sec-num{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:700;margin-bottom:10px}
+.sec-title{font-family:'DM Serif Display',serif;font-size:24px;color:#fff;margin-bottom:5px}
+.sec-sub{font-size:14px;color:var(--text2);line-height:1.6}
+
+/* FIELDS */
+.fg{margin-bottom:18px}
+.fl{font-size:11px;font-weight:700;color:#fff;letter-spacing:.06em;text-transform:uppercase;margin-bottom:7px;display:block}
+.fh{font-size:12px;color:var(--text3);margin-bottom:7px;display:block}
+.fi,.ft,.fs{width:100%;background:var(--field-bg);border:1px solid var(--border);border-radius:8px;color:#fff;font-family:'DM Sans',sans-serif;font-size:14px;padding:11px 14px;outline:none;transition:border-color .2s}
+.fi:focus,.ft:focus,.fs:focus{border-color:var(--accent)}
+.fi::placeholder,.ft::placeholder{color:var(--text3)}
+.ft{resize:vertical;min-height:85px;line-height:1.6}
+.fs{cursor:pointer;appearance:none}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+
+/* OPTION CARDS */
+.opt-grid{display:grid;gap:10px}
+.opt-grid.cols2{grid-template-columns:1fr 1fr}
+.opt-grid.cols3{grid-template-columns:1fr 1fr 1fr}
+.opt-card{background:var(--field-bg);border:1.5px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .2s;font-size:13px;font-weight:500;color:var(--text2)}
+.opt-card:hover{border-color:var(--text3);color:#fff}
+.opt-card.selected{border-color:var(--accent);background:rgba(60,193,104,.1);color:#fff}
+.opt-card-title{font-weight:600;color:inherit;margin-bottom:2px}
+.opt-card-sub{font-size:12px;color:var(--text3)}
+.opt-card.selected .opt-card-sub{color:var(--text2)}
+
+/* COLOR PICKER */
 .color-row{display:flex;align-items:center;gap:12px}
-.color-row input[type=color]{width:44px;height:44px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer;padding:2px}
-.color-row input[type=text]{flex:1}
+.color-preview{width:40px;height:40px;border-radius:8px;border:2px solid var(--border);flex-shrink:0;cursor:pointer}
+.color-hex{width:110px}
 
-.logo-upload-area{background:var(--field);border:2px dashed var(--border);border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:all .2s}
-.logo-upload-area:hover{border-color:var(--green-dim)}
-.logo-upload-area.has-logo{border-color:var(--green);border-style:solid}
-.logo-preview{width:64px;height:64px;border-radius:10px;object-fit:cover;margin:0 auto 8px;display:block}
-.logo-upload-text{font-size:13px;color:var(--muted)}
-.logo-upload-hint{font-size:11px;color:var(--muted);margin-top:4px;opacity:.7}
+/* LOGO UPLOAD */
+.logo-upload{border:2px dashed var(--border);border-radius:8px;padding:24px;text-align:center;cursor:pointer;transition:border-color .2s}
+.logo-upload:hover{border-color:var(--text3)}
+.logo-upload.has-file{border-color:var(--accent);border-style:solid}
+.logo-upload input{display:none}
+.logo-up-text{font-size:13px;color:var(--text2)}
+.logo-up-hint{font-size:11px;color:var(--text3);margin-top:4px}
+.logo-thumb{max-height:60px;max-width:180px;margin:0 auto 8px;display:block;border-radius:4px}
 
-.options-grid{display:grid;gap:10px}
-.options-grid.cols2{grid-template-columns:1fr 1fr}
-.options-grid.cols3{grid-template-columns:1fr 1fr 1fr}
-.opt-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;cursor:pointer;transition:all .15s;text-align:left}
-.opt-card:hover{border-color:var(--green-dim)}
-.opt-card.selected{background:#0d3320;border-color:var(--green);color:#fff}
-.opt-card .opt-title{font-size:14px;font-weight:500;color:#fff}
-.opt-card .opt-desc{font-size:12px;color:var(--muted);margin-top:4px}
-.opt-card.selected .opt-desc{color:var(--green-light)}
+/* RANGE */
+.range-wrap{display:flex;align-items:center;gap:14px}
+.range-input{flex:1;accent-color:var(--accent)}
+.range-val{font-size:14px;font-weight:600;color:var(--accent);min-width:50px;text-align:right}
 
-.nav-row{display:flex;justify-content:space-between;align-items:center;margin-top:40px;padding-top:24px;border-top:1px solid var(--border)}
-.btn{padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s;border:none;font-family:'Inter',sans-serif}
-.btn-primary{background:var(--green);color:#071a0e}
-.btn-primary:hover{background:var(--green-light)}
-.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
-.btn-ghost:hover{color:#fff;border-color:#fff}
-.btn-generate{background:linear-gradient(135deg,var(--green),#1d9e75);color:#071a0e;padding:14px 32px;font-size:15px}
-.progress-text{font-size:13px;color:var(--muted)}
+/* NAV BUTTONS */
+.nav-row{display:flex;justify-content:space-between;align-items:center;margin-top:36px;padding-top:24px;border-top:1px solid var(--border)}
+.btn-back{background:transparent;border:1px solid var(--border);color:var(--text2);padding:11px 22px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-back:hover{border-color:var(--text2);color:#fff}
+.btn-next{background:var(--accent);color:#fff;border:none;padding:11px 28px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;letter-spacing:.04em;text-transform:uppercase;transition:opacity .2s}
+.btn-next:hover{opacity:.9}
+.btn-generate{background:var(--accent);color:#fff;border:none;padding:13px 32px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.04em;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.btn-generate:hover{opacity:.9}
+.btn-generate:disabled{opacity:.5;cursor:not-allowed}
 
-.mode-screen{max-width:680px;margin:60px auto;padding:0 24px}
-.mode-screen h1{font-size:32px;font-weight:700;margin-bottom:8px}
-.mode-screen p{color:var(--muted);margin-bottom:40px;font-size:15px}
-.mode-cards{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-.mode-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:28px;cursor:pointer;transition:all .2s}
-.mode-card:hover{border-color:var(--green-dim);transform:translateY(-2px)}
-.mode-card.selected{border-color:var(--green);background:#0d3320}
-.mode-card .mc-tag{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--green);margin-bottom:12px}
-.mode-card.deep .mc-tag{color:#ffd580}
-.mode-card h3{font-size:20px;font-weight:700;margin-bottom:8px}
-.mode-card p{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:16px}
-.mode-card .mc-price{font-size:22px;font-weight:700;color:var(--green)}
-.mode-card.deep .mc-price{color:#ffd580}
-.mode-card .mc-time{font-size:12px;color:var(--muted);margin-top:4px}
-.mode-card ul{list-style:none;margin-top:16px}
-.mode-card ul li{font-size:13px;color:var(--muted);padding:4px 0;display:flex;gap:8px}
-.mode-card ul li:before{content:"✓";color:var(--green);font-weight:700}
-.mode-card.deep ul li:before{color:#ffd580}
-
-.type-screen{max-width:680px;margin:60px auto;padding:0 24px}
-.type-cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
-.type-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px;cursor:pointer;transition:all .15s;text-align:center}
-.type-card:hover{border-color:var(--green-dim)}
-.type-card.selected{border-color:var(--green);background:#0d3320}
-.type-card .tc-icon{font-size:28px;margin-bottom:10px}
-.type-card h4{font-size:15px;font-weight:600;margin-bottom:6px}
-.type-card p{font-size:12px;color:var(--muted)}
-
-.report-wrap{display:none}
-.report-wrap.active{display:block}
-
-.slide{display:none;min-height:420px;padding:40px 32px}
-.slide.active{display:block}
-
-.slide-cover{background:linear-gradient(135deg,#0a2e15 0%,#071a0e 60%,#0d1a0a 100%);min-height:480px;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;border-radius:12px;margin-bottom:16px}
-.cover-circle1{position:absolute;width:300px;height:300px;border-radius:50%;border:2px solid rgba(60,193,104,.15);top:-80px;right:-80px}
-.cover-circle2{position:absolute;width:180px;height:180px;border-radius:50%;border:2px solid rgba(60,193,104,.1);top:40px;right:60px}
-.cover-content{padding:40px;position:relative;z-index:2}
-.cover-agency-row{display:flex;align-items:center;gap:10px;margin-bottom:20px}
-.cover-agency-logo{width:40px;height:40px;border-radius:8px;background:var(--green);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;color:#071a0e;overflow:hidden;flex-shrink:0}
-.cover-agency-logo img{width:100%;height:100%;object-fit:cover}
-.cover-agency-name{font-size:14px;font-weight:600;color:rgba(255,255,255,.7);letter-spacing:.04em}
-.cover-title{font-size:44px;font-weight:900;line-height:1.05;margin-bottom:8px}
-.cover-client{font-size:16px;color:rgba(255,255,255,.6)}
-.cover-date{font-size:12px;color:rgba(255,255,255,.35);margin-top:12px}
-
-.slide-section{background:var(--card);border-radius:12px;padding:32px;margin-bottom:16px}
-.slide-section-header{border-left:3px solid var(--green);padding-left:16px;margin-bottom:24px}
-.slide-section-header h2{font-size:20px;font-weight:700}
-.slide-section-header p{font-size:13px;color:var(--muted);margin-top:4px}
-
-.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
-.metric-card{background:#071a0e;border-radius:10px;padding:16px;text-align:center}
-.metric-val{font-size:26px;font-weight:700;color:var(--green)}
-.metric-label{font-size:11px;color:var(--muted);margin-top:4px;text-transform:uppercase;letter-spacing:.05em}
-.signal-good{background:#0d3320;color:var(--green-light);font-size:11px;padding:2px 8px;border-radius:10px;display:inline-block}
-.signal-warn{background:#2a2000;color:#ffd580;font-size:11px;padding:2px 8px;border-radius:10px;display:inline-block}
-.signal-bad{background:#2a0d0d;color:#ff8080;font-size:11px;padding:2px 8px;border-radius:10px;display:inline-block}
-
-.gap-item{background:#071a0e;border-radius:8px;padding:16px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start}
-.gap-num{width:28px;height:28px;border-radius:50%;background:var(--green);color:#071a0e;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.gap-content h4{font-size:14px;font-weight:600;margin-bottom:4px}
-.gap-content p{font-size:13px;color:var(--muted);line-height:1.5}
-
-.roadmap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.roadmap-month{background:#071a0e;border-radius:8px;padding:14px}
-.roadmap-month .rm-label{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--green);margin-bottom:6px}
-.roadmap-month .rm-month{font-size:13px;font-weight:600;margin-bottom:10px}
-.roadmap-month ul{list-style:none}
-.roadmap-month ul li{font-size:12px;color:var(--muted);padding:3px 0;display:flex;gap:6px}
-.roadmap-month ul li:before{content:"→";color:var(--green);font-size:10px;margin-top:1px}
-
-.checklist-item{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
-.checklist-item:last-child{border-bottom:none}
-.chk{width:18px;height:18px;border-radius:4px;border:2px solid var(--border);cursor:pointer;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;transition:all .15s}
-.chk.checked{background:var(--green);border-color:var(--green)}
-.chk.checked:after{content:"✓";color:#071a0e;font-size:11px;font-weight:700}
-.chk-text{font-size:13px;color:#fff;line-height:1.5}
-.chk-text.done{text-decoration:line-through;color:var(--muted)}
-.priority-high{background:#2a0d0d;color:#ff8080;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 8px;border-radius:10px;display:inline-block}
-.priority-med{background:#2a2000;color:#ffd580;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 8px;border-radius:10px;display:inline-block}
-.priority-low{background:#0d2a1a;color:var(--green-light);font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 8px;border-radius:10px;display:inline-block}
-
-.persona-card{background:#071a0e;border-radius:10px;padding:20px;margin-bottom:12px}
-.persona-name{font-size:16px;font-weight:700;margin-bottom:4px}
-.persona-who{font-size:13px;color:var(--muted);margin-bottom:12px}
-.persona-section label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--green);display:block;margin-bottom:6px}
-.persona-section ul{list-style:none}
-.persona-section ul li{font-size:13px;color:#ccc;padding:2px 0;display:flex;gap:8px}
-.persona-section ul li:before{content:"•";color:var(--green)}
-
-.loading-state{text-align:center;padding:60px 20px}
-.loading-state .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 16px}
-@keyframes spin{to{transform:rotate(360deg)}}
-.loading-state h3{font-size:18px;font-weight:600;margin-bottom:8px}
-.loading-state p{font-size:14px;color:var(--muted)}
-.loading-steps{text-align:left;max-width:300px;margin:24px auto 0;list-style:none}
-.loading-steps li{font-size:13px;color:var(--muted);padding:6px 0;display:flex;gap:8px}
-.loading-steps li.done{color:var(--green)}
-.loading-steps li .step-dot{width:8px;height:8px;border-radius:50%;background:var(--border);margin-top:5px;flex-shrink:0}
-.loading-steps li.done .step-dot{background:var(--green)}
-.loading-steps li.current .step-dot{background:#ffd580;animation:pulse .8s ease-in-out infinite}
-.loading-steps li.current{color:#ffd580}
+/* AHREFS SECTION */
+.domain-row{display:flex;gap:10px;margin-bottom:20px}
+.domain-row .fi{flex:1}
+.btn-pull{background:var(--accent);color:#fff;border:none;padding:11px 18px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.btn-pull:disabled{opacity:.5;cursor:not-allowed}
+.ahrefs-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.ahrefs-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
+.ahrefs-card-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.ahrefs-card-val{font-size:22px;font-weight:700;color:#fff}
+.ahrefs-card-sub{font-size:11px;color:var(--text2);margin-top:2px}
+.ahrefs-card.signal-gap{border-color:var(--danger);background:rgba(232,69,69,.06)}
+.ahrefs-card.signal-gap .ahrefs-card-val{color:var(--danger)}
+.ahrefs-card.signal-ok{border-color:var(--accent);background:rgba(60,193,104,.06)}
+.ahrefs-card.signal-ok .ahrefs-card-val{color:var(--accent)}
+.signal-list{margin-top:16px}
+.signal-item{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-radius:8px;margin-bottom:8px;font-size:13px}
+.signal-item.gap{background:rgba(232,69,69,.1);border:1px solid rgba(232,69,69,.2)}
+.signal-item.ok{background:rgba(60,193,104,.08);border:1px solid rgba(60,193,104,.15)}
+.signal-item.warn{background:rgba(240,165,0,.08);border:1px solid rgba(240,165,0,.15)}
+.signal-icon{font-size:14px;flex-shrink:0;margin-top:1px}
+.signal-text strong{display:block;font-weight:600;color:#fff;margin-bottom:2px}
+.signal-text span{color:var(--text2)}
+.status-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;border-radius:20px}
+.status-pill.loading{background:rgba(240,165,0,.15);color:var(--warn)}
+.status-pill.done{background:rgba(60,193,104,.15);color:var(--accent)}
+.status-pill.err{background:rgba(232,69,69,.15);color:var(--danger)}
+.pulse{animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-.export-bar{display:flex;gap:12px;padding:16px 32px;background:#050f09;border-bottom:1px solid var(--border)}
-.btn-sm{padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;border:none;font-family:'Inter',sans-serif;transition:all .15s}
-.btn-print{background:var(--green);color:#071a0e}
-.btn-print:hover{background:var(--green-light)}
+/* REPORT */
+#reportScreen{background:var(--bg)}
+.report-topbar{height:52px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.report-topbar-left{display:flex;align-items:center;gap:12px}
+.slide-thumbs{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:0 28px;background:var(--surface2);border-bottom:1px solid var(--border)}
+.slide-thumb{flex-shrink:0;width:90px;height:52px;border-radius:6px;border:2px solid var(--border);cursor:pointer;overflow:hidden;transition:border-color .2s;background:#111;display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--text3);font-weight:600;text-align:center;padding:4px;margin:8px 0}
+.slide-thumb.active{border-color:var(--accent)}
+.slide-thumb:hover{border-color:var(--text3)}
 
-.forecast-card{background:#071a0e;border-radius:10px;padding:20px}
-.forecast-card .fc-label{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
-.forecast-card .fc-val{font-size:28px;font-weight:800;color:var(--green)}
-.forecast-card .fc-desc{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5}
+/* SLIDES */
+.slides-wrap{padding:32px 28px}
+.slide{display:none;max-width:900px;margin:0 auto}
+.slide.active{display:block}
 
-.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:200;align-items:center;justify-content:center}
-.modal-overlay.open{display:flex}
-.modal{background:#0e2618;border:1px solid var(--border);border-radius:14px;padding:32px;width:520px;max-width:92vw;max-height:90vh;overflow-y:auto}
-.modal h3{font-size:20px;font-weight:700;margin-bottom:24px}
-
-@media print{
-  .topbar,.tabs-wrap,.export-bar,.nav-row{display:none!important}
-  .slide{display:block!important;page-break-after:always}
-  .report-wrap{display:block!important}
-  body{background:#fff!important}
-  .slide-cover{min-height:auto!important}
+/* --- SLIDE COVER --- */
+.s-cover{
+  background:var(--report-primary, #1a2e22);
+  border-radius:16px;overflow:hidden;position:relative;
+  min-height:460px;display:flex;flex-direction:column;justify-content:flex-end;
+  padding:48px;
 }
+.s-cover-circles{position:absolute;top:0;right:0;width:100%;height:100%;pointer-events:none;overflow:hidden}
+.s-cover-circles span{position:absolute;border-radius:50%;opacity:.12}
+.s-cover-agency-logo{position:absolute;top:32px;left:48px;display:flex;align-items:center;gap:10px}
+.s-cover-logo-box{width:48px;height:48px;border-radius:10px;overflow:hidden;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:#fff}
+.s-cover-logo-box img{width:100%;height:100%;object-fit:cover}
+.s-cover-agency-name{font-size:16px;font-weight:600;color:rgba(255,255,255,.8)}
+.s-cover-label{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.5);margin-bottom:8px}
+.s-cover-title{font-family:'DM Serif Display',serif;font-size:40px;color:#fff;line-height:1.15;margin-bottom:6px}
+.s-cover-client{font-size:18px;color:rgba(255,255,255,.7);margin-bottom:28px}
+.s-cover-accent-line{width:48px;height:4px;border-radius:99px;background:var(--report-accent, #3cc168);margin-bottom:24px}
+.s-cover-meta{display:flex;gap:28px}
+.s-cover-meta-item label{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.4)}
+.s-cover-meta-item span{font-size:14px;color:rgba(255,255,255,.8);font-weight:600}
+
+/* --- SLIDE LIGHT STYLE --- */
+.s-light{background:#fff;border-radius:16px;overflow:hidden;min-height:460px}
+.s-light-header{padding:24px 36px 20px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between}
+.s-light-agency{display:flex;align-items:center;gap:8px}
+.s-light-logo{width:28px;height:28px;border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:#fff}
+.s-light-logo img{width:100%;height:100%;object-fit:cover}
+.s-light-agency-name{font-size:12px;font-weight:600;color:#333}
+.s-light-client{font-size:12px;color:#999}
+.s-light-body{padding:32px 36px}
+.s-section-tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px;padding:4px 10px;border-radius:4px}
+.s-title{font-family:'DM Serif Display',serif;font-size:26px;color:#111;margin-bottom:6px;line-height:1.2}
+.s-accent-line{width:36px;height:3px;border-radius:99px;margin-bottom:20px}
+.s-body-text{font-size:14px;color:#444;line-height:1.7}
+.s-footer{padding:14px 36px;background:#f8f8f8;border-top:1px solid #eee;display:flex;justify-content:space-between;align-items:center}
+.s-footer span{font-size:11px;color:#bbb}
+.s-footer-logo{font-size:11px;font-weight:700}
+
+/* DATA TABLE */
+.data-table{width:100%;border-collapse:collapse;margin-top:16px}
+.data-table th{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:8px 12px;border-bottom:2px solid #eee;text-align:left;color:#888}
+.data-table td{font-size:13px;padding:10px 12px;border-bottom:1px solid #f0f0f0;color:#222}
+.data-table tr:last-child td{border-bottom:none}
+.data-table .num{font-weight:700}
+.badge-gap{background:#fef2f2;color:#dc2626;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px}
+.badge-ok{background:#f0fdf4;color:#16a34a;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px}
+.badge-warn{background:#fffbeb;color:#d97706;font-size:11px;font-weight:600;padding:2px 8px;border-radius:4px}
+
+/* METRIC CARDS */
+.metric-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:16px}
+.metric-card{background:#f8f9fa;border-radius:10px;padding:16px}
+.metric-card-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px}
+.metric-card-val{font-size:24px;font-weight:700;color:#111;margin-bottom:2px}
+.metric-card-sub{font-size:12px;color:#888}
+
+/* GAP CARDS */
+.gap-grid{display:grid;gap:12px;margin-top:16px}
+.gap-card{border-radius:10px;padding:18px 20px;border-left:4px solid}
+.gap-card.critical{background:#fef2f2;border-color:#dc2626}
+.gap-card.opportunity{background:#f0fdf4;border-color:#16a34a}
+.gap-card.warning{background:#fffbeb;border-color:#d97706}
+.gap-card-title{font-size:14px;font-weight:700;margin-bottom:5px}
+.gap-card.critical .gap-card-title{color:#dc2626}
+.gap-card.opportunity .gap-card-title{color:#16a34a}
+.gap-card.warning .gap-card-title{color:#d97706}
+.gap-card-desc{font-size:13px;color:#555;line-height:1.6}
+
+/* ROADMAP */
+.roadmap-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:16px}
+.roadmap-card{background:#f8f9fa;border-radius:10px;padding:16px;border-top:3px solid}
+.roadmap-card-month{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px}
+.roadmap-card-label{font-size:14px;font-weight:700;color:#111;margin-bottom:10px}
+.roadmap-card-items{list-style:none}
+.roadmap-card-items li{font-size:12px;color:#555;padding:3px 0;padding-left:14px;position:relative}
+.roadmap-card-items li::before{content:'•';position:absolute;left:0;color:#888}
+
+/* CHECKLIST */
+.checklist{list-style:none;margin-top:16px}
+.checklist-item{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid #f0f0f0;cursor:pointer}
+.checklist-item:last-child{border-bottom:none}
+.checklist-box{width:18px;height:18px;border-radius:4px;border:2px solid #ddd;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;transition:all .2s}
+.checklist-item.checked .checklist-box{background:#16a34a;border-color:#16a34a;color:#fff}
+.checklist-item.checked .checklist-text{text-decoration:line-through;color:#bbb}
+.checklist-text{font-size:13px;color:#333;line-height:1.5}
+.checklist-phase{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#aaa;margin-top:16px;margin-bottom:4px}
+
+/* PERSONA */
+.persona-card{background:#f8f9fa;border-radius:12px;padding:20px;margin-top:16px}
+.persona-name{font-size:18px;font-weight:700;color:#111;margin-bottom:4px}
+.persona-who{font-size:13px;color:#666;margin-bottom:14px}
+.persona-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.persona-section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:6px}
+.persona-tag{display:inline-block;background:#eee;color:#555;font-size:12px;padding:3px 10px;border-radius:4px;margin:2px 3px 2px 0}
+
+/* LOADING */
+.loading-wrap{text-align:center;padding:80px 28px}
+.loading-spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 20px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-title{font-size:18px;font-weight:600;color:#fff;margin-bottom:8px}
+.loading-steps{list-style:none;text-align:left;display:inline-block}
+.loading-step{font-size:13px;padding:5px 0;display:flex;align-items:center;gap:8px}
+.loading-step .ld-icon{width:16px;height:16px;flex-shrink:0}
+.loading-step.done{color:var(--accent)}
+.loading-step.active{color:#fff;font-weight:600}
+.loading-step.pending{color:var(--text3)}
+
+/* REPORT NAV */
+.report-nav{display:flex;gap:10px;align-items:center}
+.rnav-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
+.rnav-btn:hover{border-color:var(--accent);color:#fff}
+.rnav-btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.slide-counter{font-size:12px;color:var(--text3)}
+
+/* TOAST */
+.toast{position:fixed;bottom:28px;right:28px;background:var(--surface);border:1px solid var(--border);padding:12px 18px;border-radius:8px;font-size:13px;color:#fff;z-index:999;opacity:0;transform:translateY(10px);transition:all .3s;pointer-events:none}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.success{border-color:var(--accent);color:var(--accent)}
+.toast.error{border-color:var(--danger);color:var(--danger)}
 </style>
 </head>
 <body>
 
-<!-- TOP BAR -->
+<!-- TOPBAR -->
 <div class="topbar">
-  <div class="topbar-brand" onclick="openBrandingModal()">
-    <div class="topbar-logo" id="topLogo">BD</div>
-    <div class="topbar-name" id="topName">Brand Diagnostic</div>
+  <div class="tb-left">
+    <div class="agency-logo" id="topbarLogo">BD</div>
+    <span class="tb-name" id="topbarName">Brand Diagnostic</span>
+    <span class="tb-badge" id="topbarMode">Tool</span>
   </div>
-  <div class="topbar-right">
-    <span class="mode-badge mode-quick" id="modeBadge" style="display:none"></span>
-    <div id="progressDisplay"></div>
-    <button class="btn btn-ghost" onclick="openBrandingModal()" style="padding:7px 14px;font-size:12px">⚙ Branding</button>
+  <div class="progress-wrap" id="progressWrap" style="display:none">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+    <div class="progress-label" id="progressLabel">Section 1</div>
   </div>
 </div>
 
-<!-- BRANDING MODAL -->
-<div class="modal-overlay" id="brandModal">
-  <div class="modal">
-    <h3>Agency Branding</h3>
-    <div class="field">
-      <label>Agency Logo</label>
-      <div class="logo-upload-area" id="logoUploadArea" onclick="document.getElementById('logoFileInput').click()">
-        <input type="file" id="logoFileInput" accept="image/*" style="display:none" onchange="handleLogoUpload(event)">
-        <div id="logoUploadContent">
-          <div style="font-size:28px;margin-bottom:8px">🖼</div>
-          <div class="logo-upload-text">Click to upload your logo</div>
-          <div class="logo-upload-hint">PNG, SVG or JPG — appears on every report slide</div>
+<!-- SCREEN: MODE SELECT -->
+<div id="modeScreen" class="screen active">
+  <div class="mode-wrap">
+    <div style="margin-bottom:20px">
+      <div class="sec-num">1</div>
+    </div>
+    <div class="mode-title">Brand Diagnostic Tool</div>
+    <div class="mode-sub">First, set up your agency branding, then choose your diagnostic type</div>
+
+    <!-- Agency Branding inline -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:28px;text-align:left">
+      <div style="font-size:13px;font-weight:700;color:#fff;margin-bottom:16px;text-transform:uppercase;letter-spacing:.05em">Agency Branding</div>
+      <div class="grid2">
+        <div class="fg">
+          <label class="fl">Agency Name</label>
+          <input class="fi" id="agencyName" placeholder="Your Agency Name" oninput="updateBranding()">
+        </div>
+        <div class="fg">
+          <label class="fl">Your Email</label>
+          <input class="fi" id="agencyEmail" placeholder="you@agency.com" type="email">
+        </div>
+      </div>
+      <div class="fg">
+        <label class="fl">Brand Colour</label>
+        <div class="color-row">
+          <input type="color" id="agencyColor" value="#3cc168" onchange="updateBranding()" style="width:40px;height:40px;border:2px solid var(--border);border-radius:8px;cursor:pointer;background:none;padding:2px">
+          <input class="fi color-hex" id="agencyColorHex" value="#3cc168" placeholder="#3cc168" oninput="syncColorHex()">
+          <span style="font-size:12px;color:var(--text3)">Used on cover, accents & buttons throughout the report</span>
+        </div>
+      </div>
+      <div class="fg" style="margin-bottom:0">
+        <label class="fl">Agency Logo</label>
+        <div class="logo-upload" id="logoUploadBox" onclick="document.getElementById('logoFileInput').click()">
+          <input type="file" id="logoFileInput" accept="image/*" onchange="handleLogoUpload(event)" style="display:none">
+          <div id="logoUploadContent">
+            <div class="logo-up-text">Click to upload logo</div>
+            <div class="logo-up-hint">PNG, SVG or JPG — recommended 200×200px</div>
+          </div>
         </div>
       </div>
     </div>
-    <div class="field"><label>Agency Name</label><input type="text" id="bm_name" placeholder="Your agency name" oninput="updateBranding()"></div>
-    <div class="field"><label>Your Name</label><input type="text" id="bm_contact" placeholder="Your full name"></div>
-    <div class="field"><label>Your Email</label><input type="email" id="bm_email" placeholder="you@agency.com"></div>
-    <div class="field">
-      <label>Brand Colour</label>
-      <div class="color-row">
-        <input type="color" id="bm_color" value="#3cc168" oninput="updateAccent(this.value)">
-        <input type="text" id="bm_color_hex" value="#3cc168" placeholder="#3cc168" oninput="updateAccentFromHex(this.value)">
-      </div>
-    </div>
-    <div class="field"><label>Tagline (optional)</label><input type="text" id="bm_tagline" placeholder="Your agency tagline"></div>
-    <div style="display:flex;gap:12px;margin-top:8px">
-      <button class="btn btn-primary" onclick="saveBranding()">Save Branding</button>
-      <button class="btn btn-ghost" onclick="closeBrandingModal()">Cancel</button>
-    </div>
-  </div>
-</div>
 
-<!-- SECTION TABS -->
-<div class="tabs-wrap" id="tabsWrap" style="display:none">
-  <div class="tabs" id="tabsEl"></div>
-</div>
-
-<!-- EXPORT BAR -->
-<div class="export-bar" id="exportBar" style="display:none">
-  <button class="btn-sm btn-ghost" style="background:transparent;color:var(--muted);border:1px solid var(--border)" onclick="backToQuestionnaire()">← Back</button>
-  <button class="btn-sm btn-print" onclick="window.print()">Save PDF</button>
-  <button class="btn-sm" style="background:#1a3a1a;color:var(--green-light);border:1px solid var(--green-dim)" onclick="exportHTML()">Download Report (HTML)</button>
-</div>
-
-<!-- SLIDE NAV -->
-<div id="slideNavWrap" style="display:none;position:sticky;top:60px;z-index:50;background:#050f09;border-bottom:1px solid var(--border);padding:10px 32px;overflow-x:auto;white-space:nowrap"></div>
-
-<!-- MAIN APP -->
-<div id="app">
-
-  <!-- MODE SELECT -->
-  <div id="modeScreen" class="mode-screen">
-    <h1>Brand Diagnostic</h1>
-    <p>Select your diagnostic type. Each is designed to uncover specific gaps and opportunities for your client.</p>
+    <div style="font-size:13px;font-weight:700;color:#fff;margin-bottom:16px;text-align:left;text-transform:uppercase;letter-spacing:.05em">Choose Diagnostic Type</div>
     <div class="mode-cards">
-      <div class="mode-card" id="mc_quick" onclick="selectMode('quick')">
-        <div class="mc-tag">Quick diagnostic</div>
-        <h3>Discovery</h3>
-        <p>A focused 30-minute diagnostic covering the core pillars of business performance.</p>
-        <div class="mc-price">$500</div>
-        <div class="mc-time">30 min call</div>
-        <ul>
-          <li>6 sections</li><li>Live SEO signals</li><li>Gap analysis</li>
-          <li>12-month forecast</li><li>Onboarding checklist</li>
+      <div class="mode-card" id="modeQuick" onclick="selectMode('quick')">
+        <div class="mode-card-badge">Quick Diagnostic</div>
+        <div class="mode-card-title">Express</div>
+        <div class="mode-card-price">$500</div>
+        <div class="mode-card-desc">30-minute call. Core data collection with automated signals for a fast, high-value report.</div>
+        <ul class="mode-card-list">
+          <li>6 questionnaire sections</li>
+          <li>Live Ahrefs data pull</li>
+          <li>Gap analysis + forecast</li>
+          <li>5-slide branded report</li>
         </ul>
       </div>
-      <div class="mode-card deep" id="mc_deep" onclick="selectMode('deep')">
-        <div class="mc-tag">Deep diagnostic</div>
-        <h3>Workshop</h3>
-        <p>An in-depth 1–2 hour workshop that maps every dimension of the business.</p>
-        <div class="mc-price">$1,000–$1,500</div>
-        <div class="mc-time">1–2 hour workshop</div>
-        <ul>
-          <li>13 sections</li><li>Live SEO + competitor data</li><li>Full gap analysis</li>
-          <li>Revenue forecast</li><li>Business canvas</li><li>Persona mapping</li>
+      <div class="mode-card" id="modeDeep" onclick="selectMode('deep')">
+        <div class="mode-card-badge">Deep Diagnostic</div>
+        <div class="mode-card-title">Full Workshop</div>
+        <div class="mode-card-price">$1,000–$1,500</div>
+        <div class="mode-card-desc">1–2 hour workshop. Full discovery across every channel, persona, and growth lever.</div>
+        <ul class="mode-card-list">
+          <li>13 questionnaire sections</li>
+          <li>Live Ahrefs + signal analysis</li>
+          <li>Deep gap + revenue forecast</li>
+          <li>Full branded slide deck</li>
         </ul>
       </div>
     </div>
+    <button class="mode-start-btn" id="startBtn" disabled onclick="startDiagnostic()">Start Diagnostic →</button>
   </div>
-
-  <!-- TYPE SELECT -->
-  <div id="typeScreen" class="type-screen" style="display:none">
-    <div style="margin-bottom:8px;font-size:13px;color:var(--muted);cursor:pointer" onclick="showModeScreen()">← Back</div>
-    <h2 style="font-size:28px;font-weight:700;margin-bottom:8px">Client Type</h2>
-    <p style="color:var(--muted);margin-bottom:32px;font-size:14px">What type of business is your client?</p>
-    <div class="type-cards">
-      <div class="type-card" id="tc_ecomm" onclick="selectType('ecomm')">
-        <div class="tc-icon">🛒</div><h4>E-commerce</h4><p>Product-based online store</p>
-      </div>
-      <div class="type-card" id="tc_leadgen" onclick="selectType('leadgen')">
-        <div class="tc-icon">🎯</div><h4>Lead Generation</h4><p>Service-based business</p>
-      </div>
-      <div class="type-card" id="tc_coaching" onclick="selectType('coaching')">
-        <div class="tc-icon">🎓</div><h4>Coaching & Consulting</h4><p>Knowledge / program based</p>
-      </div>
-    </div>
-    <div style="text-align:center;margin-top:32px">
-      <button class="btn btn-primary" onclick="startQuestionnaire()">Start Diagnostic →</button>
-    </div>
-  </div>
-
-  <!-- QUESTIONNAIRE -->
-  <div id="questionnaireWrap" style="display:none">
-    <div class="main" id="questionnaireMain"></div>
-  </div>
-
-  <!-- REPORT -->
-  <div id="reportWrap" class="report-wrap"></div>
-
 </div>
+
+<!-- SCREEN: QUESTIONNAIRE -->
+<div id="questionScreen" class="screen">
+  <div id="tabsBar" class="tabs"></div>
+  <div class="main" id="sectionContent"></div>
+</div>
+
+<!-- SCREEN: AHREFS -->
+<div id="ahrefsScreen" class="screen">
+  <div class="main">
+    <div class="sec-hd">
+      <div class="sec-num">★</div>
+      <div class="sec-title">Live Domain Intelligence</div>
+      <div class="sec-sub">Pull live Ahrefs data for the client's domain — this powers the gap analysis and forecast automatically.</div>
+    </div>
+    <div class="domain-row">
+      <input class="fi" id="domainInput" placeholder="e.g. nike.com (no https://)">
+      <button class="btn-pull" id="pullBtn" onclick="pullAhrefsData()">Pull Data</button>
+    </div>
+    <div id="ahrefsStatus"></div>
+    <div id="ahrefsResults" style="display:none">
+      <div class="ahrefs-cards" id="ahrefsCards"></div>
+      <div class="signal-list" id="signalList"></div>
+    </div>
+    <div class="nav-row">
+      <button class="btn-back" onclick="goBack()">← Back</button>
+      <button class="btn-generate" id="generateBtn" onclick="generateReport()">
+        <span>Generate Report</span>
+        <span>→</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- SCREEN: LOADING -->
+<div id="loadingScreen" class="screen">
+  <div class="loading-wrap">
+    <div class="loading-spinner"></div>
+    <div class="loading-title">Building your brand diagnostic...</div>
+    <ul class="loading-steps" id="loadingSteps">
+      <li class="loading-step pending" id="ls1">⬜ Analysing questionnaire data</li>
+      <li class="loading-step pending" id="ls2">⬜ Processing Ahrefs signals</li>
+      <li class="loading-step pending" id="ls3">⬜ Running gap analysis</li>
+      <li class="loading-step pending" id="ls4">⬜ Building revenue forecast</li>
+      <li class="loading-step pending" id="ls5">⬜ Assembling branded report</li>
+    </ul>
+  </div>
+</div>
+
+<!-- SCREEN: REPORT -->
+<div id="reportScreen" class="screen">
+  <div class="report-topbar">
+    <div class="report-topbar-left">
+      <div class="agency-logo" id="reportTopbarLogo" style="width:28px;height:28px;font-size:11px">BD</div>
+      <span style="font-size:13px;font-weight:600;color:var(--text2)" id="reportTopbarName">Report</span>
+    </div>
+    <div class="report-nav">
+      <span class="slide-counter" id="slideCounter">1 / 7</span>
+      <button class="rnav-btn" onclick="prevSlide()">← Prev</button>
+      <button class="rnav-btn" onclick="nextSlide()">Next →</button>
+      <button class="rnav-btn primary" onclick="printReport()">Save PDF</button>
+      <button class="rnav-btn" onclick="startOver()">New Diagnostic</button>
+    </div>
+  </div>
+  <div class="slide-thumbs" id="slideThumbs"></div>
+  <div class="slides-wrap">
+    <div id="slidesContainer"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
 
 <script>
-// ─── STATE ────────────────────────────────────────────────────────────────────
+// ─── STATE ───────────────────────────────────────────────────────────────────
 var state = {
-  mode: null, bizType: null,
-  agency: { name:'', contact:'', email:'', color:'#3cc168', tagline:'', logoDataUrl:'', logoSessionId:'' },
-  answers: {}, currentSection: 0
+  mode: null,
+  agency: { name:'', email:'', color:'#3cc168', logoUrl:'', logoInitials:'BD', tagline:'' },
+  clientType: null,
+  answers: {},
+  ahrefsData: null,
+  signals: [],
+  report: null,
+  currentSection: 0,
+  currentSlide: 0
 };
-var sessionId = 'sess_' + Math.random().toString(36).slice(2);
 
-// ─── LOGO UPLOAD ──────────────────────────────────────────────────────────────
+var logoDataUrl = null;
+
+// ─── BRANDING ────────────────────────────────────────────────────────────────
+function updateBranding() {
+  var name = document.getElementById('agencyName').value || 'Brand Diagnostic';
+  var color = document.getElementById('agencyColor').value;
+  state.agency.name = name;
+  state.agency.color = color;
+  var initials = name.split(' ').map(function(w){return w[0]}).join('').slice(0,2).toUpperCase() || 'BD';
+  state.agency.logoInitials = initials;
+  document.getElementById('topbarName').textContent = name;
+  document.getElementById('topbarLogo').textContent = logoDataUrl ? '' : initials;
+  if (logoDataUrl) {
+    document.getElementById('topbarLogo').innerHTML = '<img src="'+logoDataUrl+'">';
+  }
+  document.documentElement.style.setProperty('--accent', color);
+  document.getElementById('agencyColorHex').value = color;
+}
+
+function syncColorHex() {
+  var hex = document.getElementById('agencyColorHex').value;
+  if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
+    document.getElementById('agencyColor').value = hex;
+    updateBranding();
+  }
+}
+
 function handleLogoUpload(e) {
   var file = e.target.files[0];
   if (!file) return;
-  if (file.size > 5 * 1024 * 1024) { alert('Logo must be under 5MB'); return; }
   var reader = new FileReader();
   reader.onload = function(ev) {
-    var dataUrl = ev.target.result;
-    state.agency.logoDataUrl = dataUrl;
-    // Upload to server
-    fetch('/upload-logo', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ logoData: dataUrl, sessionId: sessionId })
-    }).then(function(r){ return r.json(); }).then(function(d){
-      if (d.ok) {
-        state.agency.logoSessionId = sessionId;
-        state.agency.logoUrl = d.url;
-      }
-    }).catch(function(){});
-    // Update UI immediately
-    updateLogoPreview(dataUrl, file.name);
-    updateTopBarLogo();
+    logoDataUrl = ev.target.result;
+    state.agency.logoUrl = logoDataUrl;
+    document.getElementById('logoUploadContent').innerHTML = '<img class="logo-thumb" src="'+logoDataUrl+'"><div class="logo-up-hint">'+file.name+' — click to change</div>';
+    document.getElementById('logoUploadBox').classList.add('has-file');
+    document.getElementById('topbarLogo').innerHTML = '<img src="'+logoDataUrl+'">';
+    updateBranding();
   };
   reader.readAsDataURL(file);
 }
 
-function updateLogoPreview(dataUrl, filename) {
-  var area = document.getElementById('logoUploadArea');
-  var content = document.getElementById('logoUploadContent');
-  area.classList.add('has-logo');
-  content.innerHTML = '<img src="' + dataUrl + '" class="logo-preview"><div class="logo-upload-text">' + escHtml(filename) + '</div><div class="logo-upload-hint">Click to change</div>';
-}
-
-function updateTopBarLogo() {
-  var el = document.getElementById('topLogo');
-  if (state.agency.logoDataUrl) {
-    el.innerHTML = '<img src="' + state.agency.logoDataUrl + '">';
-  } else {
-    var n = state.agency.name || 'BD';
-    el.innerHTML = n.split(' ').slice(0,2).map(function(w){return w[0];}).join('').toUpperCase() || 'BD';
-    el.style.background = state.agency.color || '#3cc168';
-    el.style.color = '#071a0e';
-  }
-}
-
-// ─── BRANDING ─────────────────────────────────────────────────────────────────
-function updateAccent(hex) {
-  document.documentElement.style.setProperty('--green', hex);
-  state.agency.color = hex;
-  document.getElementById('bm_color_hex').value = hex;
-  updateTopBarLogo();
-}
-function updateAccentFromHex(hex) {
-  if (/^#[0-9a-f]{6}$/i.test(hex)) {
-    document.getElementById('bm_color').value = hex;
-    updateAccent(hex);
-  }
-}
-function updateBranding() {
-  var n = document.getElementById('bm_name').value;
-  if (n) { state.agency.name = n; document.getElementById('topName').textContent = n; }
-  updateTopBarLogo();
-}
-function openBrandingModal() {
-  document.getElementById('bm_name').value = state.agency.name;
-  document.getElementById('bm_contact').value = state.agency.contact;
-  document.getElementById('bm_email').value = state.agency.email;
-  document.getElementById('bm_color').value = state.agency.color;
-  document.getElementById('bm_color_hex').value = state.agency.color;
-  document.getElementById('bm_tagline').value = state.agency.tagline;
-  if (state.agency.logoDataUrl) {
-    updateLogoPreview(state.agency.logoDataUrl, 'Current logo');
-  }
-  document.getElementById('brandModal').classList.add('open');
-}
-function closeBrandingModal() { document.getElementById('brandModal').classList.remove('open'); }
-function saveBranding() {
-  state.agency.name = document.getElementById('bm_name').value;
-  state.agency.contact = document.getElementById('bm_contact').value;
-  state.agency.email = document.getElementById('bm_email').value;
-  state.agency.color = document.getElementById('bm_color').value;
-  state.agency.tagline = document.getElementById('bm_tagline').value;
-  document.getElementById('topName').textContent = state.agency.name || 'Brand Diagnostic';
-  updateTopBarLogo();
-  closeBrandingModal();
-}
-
-// ─── MODE & TYPE ──────────────────────────────────────────────────────────────
+// ─── MODE SELECT ─────────────────────────────────────────────────────────────
 function selectMode(m) {
   state.mode = m;
-  document.querySelectorAll('.mode-card').forEach(function(c){c.classList.remove('selected');});
-  document.getElementById('mc_'+m).classList.add('selected');
-  setTimeout(function(){
-    document.getElementById('modeScreen').style.display = 'none';
-    document.getElementById('typeScreen').style.display = 'block';
-  }, 200);
-}
-function showModeScreen() {
-  document.getElementById('typeScreen').style.display = 'none';
-  document.getElementById('modeScreen').style.display = 'block';
-}
-function selectType(t) {
-  state.bizType = t;
-  document.querySelectorAll('.type-card').forEach(function(c){c.classList.remove('selected');});
-  document.getElementById('tc_'+t).classList.add('selected');
-}
-function startQuestionnaire() {
-  if (!state.bizType) { alert('Please select a client type first'); return; }
-  document.getElementById('typeScreen').style.display = 'none';
-  document.getElementById('questionnaireWrap').style.display = 'block';
-  document.getElementById('tabsWrap').style.display = 'block';
-  var badge = document.getElementById('modeBadge');
-  badge.style.display = 'inline-block';
-  badge.className = 'mode-badge ' + (state.mode === 'quick' ? 'mode-quick' : 'mode-deep');
-  badge.textContent = state.mode === 'quick' ? 'Quick • $500' : 'Deep Workshop • $1,000–$1,500';
-  state.currentSection = 0;
-  renderTabs(); renderSection();
+  document.getElementById('modeQuick').classList.toggle('selected', m === 'quick');
+  document.getElementById('modeDeep').classList.toggle('selected', m === 'deep');
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('topbarMode').textContent = m === 'quick' ? 'Quick $500' : 'Deep $1,000+';
+  document.getElementById('topbarBadge') && (document.getElementById('topbarBadge').textContent = m);
 }
 
-// ─── SECTIONS ─────────────────────────────────────────────────────────────────
+function startDiagnostic() {
+  if (!state.mode) return;
+  var name = document.getElementById('agencyName').value;
+  var email = document.getElementById('agencyEmail').value;
+  if (!name) { showToast('Please enter your agency name', 'error'); return; }
+  state.agency.name = name;
+  state.agency.email = email;
+  state.agency.color = document.getElementById('agencyColor').value;
+  buildSections();
+  showScreen('questionScreen');
+  document.getElementById('progressWrap').style.display = '';
+  renderSection(0);
+}
+
+// ─── SECTIONS ────────────────────────────────────────────────────────────────
 function getSections() {
   var quick = [
-    {id:'branding', title:'Agency Branding', sub:'Who is producing this report', fields:[
-      {id:'agency_name', label:'Agency name', type:'text', placeholder:'Your agency name'},
-      {id:'agency_contact', label:'Your name', type:'text', placeholder:'Your full name'},
-      {id:'agency_email', label:'Your email', type:'email', placeholder:'you@agency.com'},
-      {id:'agency_color', label:'Brand colour', type:'colorpicker'},
-      {id:'agency_tagline', label:'Tagline (optional)', type:'text', placeholder:'Your tagline'}
-    ]},
-    {id:'client', title:'Client Details', sub:'Business being diagnosed', fields:[
-      {id:'biz_name', label:'Business name', type:'text', placeholder:'Client business name'},
-      {id:'biz_url', label:'Website URL', type:'url', placeholder:'https://'},
-      {id:'biz_industry', label:'Industry / niche', type:'text', placeholder:'e.g. Health & wellness'}
-    ]},
-    {id:'financials', title:'Financial Position', sub:'Current business performance', fields:[
-      {id:'fin_revenue', label:'Current annual revenue', type:'select', options:['Under $250k','$250k–$500k','$500k–$1M','$1M–$3M','$3M–$10M','$10M+']},
-      {id:'fin_target', label:'Revenue target (12 months)', type:'text', placeholder:'e.g. $2M'},
-      {id:'fin_adspend', label:'Current monthly ad spend', type:'text', placeholder:'e.g. $5,000/month'},
-      {id:'fin_goals', label:'Primary business goal', type:'textarea', placeholder:'What does success look like in 12 months?'}
-    ]},
-    {id:'brand', title:'Brand & Market', sub:'How the business is positioned', fields:[
-      {id:'b_describe', label:'Describe the business in 2–3 sentences', type:'textarea', placeholder:'What do they do, who do they serve, what makes them different?'},
-      {id:'b_usp', label:'Core differentiator / USP', type:'textarea', placeholder:'Why do customers choose them over competitors?'},
-      {id:'b_challenge', label:'Biggest marketing challenge right now', type:'textarea', placeholder:'What is the #1 thing holding growth back?'}
-    ]},
-    {id:'obstacles', title:'Obstacles & Gaps', sub:'Where the business is struggling', fields:[
-      {id:'o_main', label:'Main obstacle to hitting revenue target', type:'textarea', placeholder:'What is getting in the way?'},
-      {id:'o_tried', label:'What have they already tried?', type:'textarea', placeholder:'Previous marketing efforts, campaigns, strategies...'},
-      {id:'o_competitors', label:'Key competitors (name 2–3)', type:'textarea', placeholder:'Who are they competing with?'}
-    ]},
-    {id:'acquisition', title:'Acquisition Channels', sub:'How they currently get clients', fields:[
-      {id:'a_channels', label:'Active marketing channels', type:'multicheck', options:['Google Ads','Meta Ads','SEO / Content','Email marketing','Social organic','Referrals','Events','TikTok Ads','YouTube Ads']},
-      {id:'a_best', label:'Best performing channel', type:'text', placeholder:'Which channel brings the most revenue?'},
-      {id:'a_cac', label:'Estimated cost to acquire a customer', type:'text', placeholder:'e.g. $120 per lead, $800 per sale'}
-    ]}
+    { id:'client', title:'Client Details', sub:'Basic info about the business you\\'re diagnosing.' },
+    { id:'financials', title:'Financials & Goals', sub:'Current revenue position and growth targets.' },
+    { id:'brand', title:'Brand & Market', sub:'How they position themselves and who they serve.' },
+    { id:'obstacles', title:'Obstacles & Gaps', sub:'What\\'s blocking growth right now.' },
+    { id:'marketing', title:'Marketing Channels', sub:'What\\'s running and what\\'s not.' },
+    { id:'competitors', title:'Competitors', sub:'Who they\\'re up against in the market.' }
   ];
   var deep = [
-    {id:'branding', title:'Agency Branding', sub:'Who is producing this report', fields:[
-      {id:'agency_name', label:'Agency name', type:'text', placeholder:'Your agency name'},
-      {id:'agency_contact', label:'Your name', type:'text', placeholder:'Your full name'},
-      {id:'agency_email', label:'Your email', type:'email', placeholder:'you@agency.com'},
-      {id:'agency_color', label:'Brand colour', type:'colorpicker'},
-      {id:'agency_tagline', label:'Tagline (optional)', type:'text', placeholder:'Your tagline'}
-    ]},
-    {id:'client', title:'Client Details', sub:'Business being diagnosed', fields:[
-      {id:'biz_name', label:'Business name', type:'text', placeholder:'Client business name'},
-      {id:'biz_url', label:'Website URL', type:'url', placeholder:'https://'},
-      {id:'biz_industry', label:'Industry / niche', type:'text', placeholder:'e.g. Health & wellness'}
-    ]},
-    {id:'financials', title:'Financial Position', sub:'Current business performance', fields:[
-      {id:'fin_revenue', label:'Current annual revenue', type:'select', options:['Under $250k','$250k–$500k','$500k–$1M','$1M–$3M','$3M–$10M','$10M+']},
-      {id:'fin_target', label:'Revenue target (12 months)', type:'text', placeholder:'e.g. $2M'},
-      {id:'fin_adspend', label:'Monthly ad spend', type:'text', placeholder:'e.g. $5,000/month'},
-      {id:'fin_margin', label:'Approximate gross margin', type:'select', options:['Under 20%','20–40%','40–60%','60–80%','80%+','Unknown']},
-      {id:'fin_goals', label:'Primary business goals', type:'textarea', placeholder:'Top 3 goals in the next 12 months'}
-    ]},
-    {id:'brand', title:'Brand Foundations', sub:'Identity, positioning and market fit', fields:[
-      {id:'b_describe', label:'Describe the business', type:'textarea', placeholder:'What do they do, who do they serve, what makes them different?'},
-      {id:'b_values', label:'Core brand values', type:'textarea', placeholder:'What principles guide the business?'},
-      {id:'b_usp', label:'Core differentiator / USP', type:'textarea', placeholder:'Why do customers choose them over competitors?'},
-      {id:'b_voice', label:'Brand voice and tone', type:'text', placeholder:'e.g. Professional but approachable, bold, empathetic'}
-    ]},
-    {id:'goals', title:'Goals & Vision', sub:'Where they want to go', fields:[
-      {id:'g_vision', label:'12-month vision', type:'textarea', placeholder:'What does success look like in 12 months?'},
-      {id:'g_priority', label:'Top 3 priorities right now', type:'textarea', placeholder:'What are they most focused on achieving?'},
-      {id:'g_longterm', label:'3–5 year ambition', type:'textarea', placeholder:'Where does the founder want to take this business?'}
-    ]},
-    {id:'obstacles', title:'Obstacles & Challenges', sub:'What is holding them back', fields:[
-      {id:'o_main', label:'Main obstacle to growth', type:'textarea', placeholder:'What is getting in the way of hitting targets?'},
-      {id:'o_tried', label:'What have they already tried?', type:'textarea', placeholder:'Previous marketing efforts, campaigns, strategies...'},
-      {id:'o_fear', label:'Biggest fear about marketing', type:'textarea', placeholder:'What worries them most about investing in marketing?'}
-    ]},
-    {id:'customer', title:'Customer & Persona', sub:'Who they serve', fields:[
-      {id:'c_describe', label:'Describe the ideal customer', type:'textarea', placeholder:'Demographics, psychographics, where they live, what they do...'},
-      {id:'c_motivation', label:'Primary motivation to buy', type:'textarea', placeholder:'What drives them to take action?'},
-      {id:'c_journey', label:'Buying journey', type:'textarea', placeholder:'How does a customer typically find them and decide to buy?'}
-    ]},
-    {id:'painpoints', title:'Pain Points & Dream Outcome', sub:'Emotional drivers', fields:[
-      {id:'pp_pains', label:'Top 3 customer pain points', type:'textarea', placeholder:'What problems keep the customer up at night?'},
-      {id:'pp_dream', label:'Dream outcome', type:'textarea', placeholder:'What transformation does the customer desire?'},
-      {id:'pp_trigger', label:'Buying trigger', type:'textarea', placeholder:'What event makes them decide to buy?'}
-    ]},
-    {id:'objections', title:'Objections', sub:'Why prospects do not buy', fields:[
-      {id:'obj_main', label:'Top 3 objections', type:'textarea', placeholder:'What reasons do prospects give for not buying?'},
-      {id:'obj_handle', label:'How are objections handled?', type:'textarea', placeholder:'What does the sales process do to overcome these?'}
-    ]},
-    {id:'products', title:'Products & Offers', sub:'What they sell', fields:[
-      {id:'prod_main', label:'Main product or service', type:'textarea', placeholder:'Describe the core offer — what is it, what does it deliver, what does it cost?'},
-      {id:'prod_funnel', label:'Offer funnel or product ladder', type:'textarea', placeholder:'Lead magnet, entry offer, core offer, premium tier?'},
-      {id:'prod_aov', label:'Average order / transaction value', type:'text', placeholder:'e.g. $297, $1,200, $5,000+'}
-    ]},
-    {id:'competitors', title:'Competitor Landscape', sub:'Who they compete with', fields:[
-      {id:'co_names', label:'Top 3 competitors', type:'textarea', placeholder:'Name them and their websites if known'},
-      {id:'co_diff', label:'How are competitors different?', type:'textarea', placeholder:'What do competitors do that this business does not?'},
-      {id:'co_advantage', label:'Where does the client have an advantage?', type:'textarea', placeholder:'What can they do or say that competitors cannot?'}
-    ]},
-    {id:'acquisition', title:'Acquisition Channels', sub:'How they currently get clients', fields:[
-      {id:'a_channels', label:'Active marketing channels', type:'multicheck', options:['Google Ads','Meta Ads','SEO / Content','Email marketing','Social organic','Referrals','Events','TikTok Ads','YouTube Ads']},
-      {id:'a_best', label:'Best performing channel', type:'text', placeholder:'Which channel drives the most revenue?'},
-      {id:'a_cac', label:'Cost to acquire a customer', type:'text', placeholder:'e.g. $120 per lead, $800 per sale'},
-      {id:'a_missing', label:'Channels they are NOT using that they should be', type:'textarea', placeholder:'What acquisition gaps exist?'}
-    ]},
-    {id:'retention', title:'Retention & LTV', sub:'How they keep customers', fields:[
-      {id:'r_ltv', label:'Customer lifetime value', type:'text', placeholder:'e.g. $1,200 over 12 months'},
-      {id:'r_retention', label:'Retention strategy', type:'textarea', placeholder:'How do they keep existing customers buying again?'},
-      {id:'r_referral', label:'Referral and word of mouth', type:'textarea', placeholder:'Do they have a referral programme?'}
-    ]}
+    { id:'client', title:'Client Details', sub:'Basic info about the business you\\'re diagnosing.' },
+    { id:'financials', title:'Financials & Goals', sub:'Current revenue and targets.' },
+    { id:'brand', title:'Brand & Market', sub:'Positioning, values and differentiation.' },
+    { id:'goals', title:'Goals & Vision', sub:'What they\\'re trying to achieve and by when.' },
+    { id:'obstacles', title:'Obstacles & Gaps', sub:'What\\'s blocking growth right now.' },
+    { id:'personas', title:'Customer Personas', sub:'Who buys from them and why.' },
+    { id:'painpoints', title:'Pain Points', sub:'What their customers struggle with.' },
+    { id:'objections', title:'Sales Objections', sub:'Why people don\\'t buy — and how they handle it.' },
+    { id:'products', title:'Products & Offers', sub:'What they sell and their best performers.' },
+    { id:'competitors', title:'Competitors', sub:'Who they\\'re up against in the market.' },
+    { id:'marketing', title:'Marketing Channels', sub:'What\\'s running, what\\'s not, and what works.' },
+    { id:'retention', title:'Retention & LTV', sub:'How they keep customers and increase value.' },
+    { id:'reviews', title:'Reviews & Social Proof', sub:'What their customers say and where.' }
   ];
-  var typeSection = getTypeSection();
-  if (typeSection) { quick.push(typeSection); deep.push(typeSection); }
   return state.mode === 'quick' ? quick : deep;
 }
 
-function getTypeSection() {
-  if (state.bizType === 'ecomm') return {id:'type_specific', title:'E-commerce Specifics', sub:'Online store performance', fields:[
-    {id:'ec_platform', label:'E-commerce platform', type:'text', placeholder:'e.g. Shopify, WooCommerce'},
-    {id:'ec_aov', label:'Average order value', type:'text', placeholder:'e.g. $85'},
-    {id:'ec_roas', label:'Current ROAS (if running ads)', type:'text', placeholder:'e.g. 2.4x'},
-    {id:'ec_cro', label:'Website conversion rate', type:'text', placeholder:'e.g. 1.8%'},
-    {id:'ec_repeat', label:'Repeat purchase rate', type:'text', placeholder:'e.g. 30% of customers buy again'}
-  ]};
-  if (state.bizType === 'leadgen') return {id:'type_specific', title:'Lead Gen Specifics', sub:'Sales pipeline performance', fields:[
-    {id:'lg_leads', label:'Leads per month', type:'text', placeholder:'e.g. 40 leads/month'},
-    {id:'lg_close', label:'Close rate', type:'text', placeholder:'e.g. 25%'},
-    {id:'lg_cycle', label:'Average sales cycle', type:'text', placeholder:'e.g. 2 weeks from lead to close'},
-    {id:'lg_nurture', label:'Lead nurturing sequence', type:'textarea', placeholder:'What happens after someone opts in?'}
-  ]};
-  if (state.bizType === 'coaching') return {id:'type_specific', title:'Coaching Specifics', sub:'Program and audience', fields:[
-    {id:'coa_program', label:'Core program or offer', type:'textarea', placeholder:'Describe the main coaching program'},
-    {id:'coa_students', label:'Current number of clients', type:'text', placeholder:'e.g. 45 active clients'},
-    {id:'coa_authority', label:'Authority and credibility', type:'textarea', placeholder:'Credentials, results, case studies, audience size'},
-    {id:'coa_enrol', label:'Enrolment process', type:'textarea', placeholder:'How do prospects become clients?'}
-  ]};
-  return null;
-}
-
-// ─── RENDER ───────────────────────────────────────────────────────────────────
-function renderTabs() {
-  var sections = getSections();
-  var html = '';
-  sections.forEach(function(s, i) {
-    var cls = 'tab';
-    if (i === state.currentSection) cls += ' active';
-    else if (state.answers[s.id] && Object.keys(state.answers[s.id]).length) cls += ' done';
-    html += '<div class="' + cls + '" onclick="goToSection(' + i + ')">' + s.title + '</div>';
-  });
-  html += '<div class="tab" onclick="goToSection(' + sections.length + ')" style="color:var(--green-light);font-weight:600">Generate Report →</div>';
-  document.getElementById('tabsEl').innerHTML = html;
-}
-
-function goToSection(i) {
-  saveCurrentSection();
-  var sections = getSections();
-  if (i >= sections.length) { generateReport(); return; }
-  state.currentSection = i;
-  renderTabs(); renderSection();
-}
-
-function renderSection() {
-  var sections = getSections();
-  var s = sections[state.currentSection];
-  var answers = state.answers[s.id] || {};
-  var html = '<div class="section-header"><div class="section-num">' + (state.currentSection + 1) + '</div>'
-    + '<div class="section-title">' + s.title + '</div>'
-    + '<div class="section-sub">' + s.sub + '</div></div>';
-
-  s.fields.forEach(function(f) {
-    var val = answers[f.id] || '';
-    html += '<div class="field"><label>' + f.label + '</label>';
-    if (f.type === 'text' || f.type === 'email' || f.type === 'url') {
-      html += '<input type="' + f.type + '" id="fld_' + f.id + '" value="' + escHtml(val) + '" placeholder="' + escHtml(f.placeholder || '') + '">';
-    } else if (f.type === 'textarea') {
-      html += '<textarea id="fld_' + f.id + '" placeholder="' + escHtml(f.placeholder || '') + '">' + escHtml(val) + '</textarea>';
-    } else if (f.type === 'select') {
-      html += '<select id="fld_' + f.id + '"><option value="">Select...</option>';
-      f.options.forEach(function(o){ html += '<option value="' + o + '"' + (val === o ? ' selected' : '') + '>' + o + '</option>'; });
-      html += '</select>';
-    } else if (f.type === 'colorpicker') {
-      var cv = val || state.agency.color || '#3cc168';
-      html += '<div class="color-row">'
-        + '<input type="color" id="fld_' + f.id + '_picker" value="' + cv + '" oninput="syncColor(\\'' + f.id + '\\')">'
-        + '<input type="text" id="fld_' + f.id + '" value="' + cv + '" placeholder="#3cc168" oninput="syncColorFromText(\\'' + f.id + '\\')">'
-        + '</div>';
-    } else if (f.type === 'multicheck') {
-      var selected = val ? val.split(',') : [];
-      html += '<div class="options-grid cols3">';
-      f.options.forEach(function(o) {
-        var isSel = selected.indexOf(o) >= 0;
-        html += '<div class="opt-card' + (isSel ? ' selected' : '') + '" onclick="toggleMultiCheck(this,\\'fld_' + f.id + '\\',\\'' + o + '\\')">'
-          + '<div class="opt-title">' + o + '</div></div>';
-      });
-      html += '</div><input type="hidden" id="fld_' + f.id + '" value="' + escHtml(val) + '">';
-    }
-    html += '</div>';
-  });
-
-  html += '<div class="nav-row"><div>';
-  if (state.currentSection > 0) html += '<button class="btn btn-ghost" onclick="prevSection()">← Back</button>';
-  html += '</div><div style="display:flex;align-items:center;gap:16px">'
-    + '<span class="progress-text">Section ' + (state.currentSection + 1) + ' of ' + sections.length + '</span>';
-  if (state.currentSection < sections.length - 1) {
-    html += '<button class="btn btn-primary" onclick="nextSection()">Continue →</button>';
-  } else {
-    html += '<button class="btn btn-generate" onclick="generateReport()">Generate Report ✦</button>';
-  }
-  html += '</div></div>';
-  document.getElementById('questionnaireMain').innerHTML = html;
-  document.getElementById('progressDisplay').innerHTML = '<span style="font-size:13px;color:var(--muted)">' + (state.currentSection + 1) + ' / ' + sections.length + '</span>';
-}
-
-function syncColor(id) {
-  var picker = document.getElementById('fld_' + id + '_picker');
-  var text = document.getElementById('fld_' + id);
-  if (picker && text) { text.value = picker.value; updateAccent(picker.value); }
-}
-function syncColorFromText(id) {
-  var text = document.getElementById('fld_' + id);
-  var picker = document.getElementById('fld_' + id + '_picker');
-  if (text && picker && /^#[0-9a-f]{6}$/i.test(text.value)) { picker.value = text.value; updateAccent(text.value); }
-}
-function toggleMultiCheck(el, hiddenId, val) {
-  el.classList.toggle('selected');
-  var hidden = document.getElementById(hiddenId);
-  var vals = hidden.value ? hidden.value.split(',') : [];
-  var idx = vals.indexOf(val);
-  if (idx >= 0) vals.splice(idx, 1); else vals.push(val);
-  hidden.value = vals.filter(Boolean).join(',');
-}
-
-function saveCurrentSection() {
-  var sections = getSections();
-  if (state.currentSection >= sections.length) return;
-  var s = sections[state.currentSection];
-  var answers = {};
-  s.fields.forEach(function(f) {
-    var el = document.getElementById('fld_' + f.id);
-    if (el) answers[f.id] = el.value;
-  });
-  state.answers[s.id] = answers;
-  if (s.id === 'branding') {
-    state.agency.name = answers.agency_name || state.agency.name;
-    state.agency.contact = answers.agency_contact || state.agency.contact;
-    state.agency.email = answers.agency_email || state.agency.email;
-    state.agency.color = answers.agency_color || state.agency.color;
-    state.agency.tagline = answers.agency_tagline || state.agency.tagline;
-    document.getElementById('topName').textContent = state.agency.name || 'Brand Diagnostic';
-    updateTopBarLogo();
-  }
-}
-function nextSection() { saveCurrentSection(); state.currentSection++; renderTabs(); renderSection(); window.scrollTo(0,0); }
-function prevSection() { saveCurrentSection(); state.currentSection--; renderTabs(); renderSection(); window.scrollTo(0,0); }
-
-// ─── GENERATE REPORT ─────────────────────────────────────────────────────────
-function generateReport() {
-  saveCurrentSection();
-  var domain = '';
-  if (state.answers.client && state.answers.client.biz_url) {
-    domain = state.answers.client.biz_url.replace(/https?:\\/\\//,'').replace(/\\/.*$/,'').replace(/^www\\./,'').trim();
-  }
-  var clientName = (state.answers.client && state.answers.client.biz_name) || 'Client';
-
-  document.getElementById('tabsWrap').style.display = 'none';
-  document.getElementById('questionnaireWrap').style.display = 'none';
-  document.getElementById('modeScreen').style.display = 'none';
-  document.getElementById('typeScreen').style.display = 'none';
-  document.getElementById('exportBar').style.display = 'none';
-  document.getElementById('slideNavWrap').style.display = 'none';
-  document.getElementById('progressDisplay').innerHTML = '';
-
-  var rw = document.getElementById('reportWrap');
-  rw.classList.add('active');
-  rw.innerHTML = '<div class="loading-state"><div class="spinner"></div><h3>Generating your report</h3>'
-    + '<p>Pulling live data for <strong>' + escHtml(domain || clientName) + '</strong>&hellip;</p>'
-    + '<ul class="loading-steps">'
-    + '<li id="ls0" class="current"><div class="step-dot"></div>Domain rating &amp; metrics</li>'
-    + '<li id="ls1"><div class="step-dot"></div>Keyword rankings</li>'
-    + '<li id="ls2"><div class="step-dot"></div>Competitor analysis</li>'
-    + '<li id="ls3"><div class="step-dot"></div>Backlinks &amp; top pages</li>'
-    + '<li id="ls4"><div class="step-dot"></div>Web research &amp; reviews</li>'
-    + '<li id="ls5"><div class="step-dot"></div>AI analysis &amp; report</li>'
-    + '</ul></div>';
-
-  function setProgress(pct) {
-    var ids = ['ls0','ls1','ls2','ls3','ls4','ls5'];
-    var active = Math.min(Math.floor(pct / 17), 5);
-    ids.forEach(function(id, i) {
-      var el = document.getElementById(id); if (!el) return;
-      var dot = el.querySelector('.step-dot');
-      if (i < active) { el.className = 'done'; if (dot) dot.style.background = 'var(--green)'; }
-      else if (i === active) { el.className = 'current'; if (dot) dot.style.background = '#ffd580'; }
-      else { el.className = ''; if (dot) dot.style.background = ''; }
-    });
-  }
-
-  var payload = {
-    domain: domain, clientName: clientName,
-    mode: state.mode, bizType: state.bizType,
-    agency: state.agency, answers: state.answers,
-    logoSessionId: state.agency.logoSessionId || ''
+function getFields(sectionId) {
+  var f = {
+    client: [
+      { type:'text', key:'biz_name', label:'Business Name', ph:'e.g. Peak Performance Gym' },
+      { type:'text', key:'biz_url', label:'Website URL', ph:'e.g. peakperformance.com.au' },
+      { type:'opts', key:'biz_type', label:'Business Type', cols:3, opts:[
+        {val:'ecommerce',label:'E-Commerce'},{val:'leadgen',label:'Lead Generation'},{val:'coaching',label:'Coaching / Consulting'},{val:'local',label:'Local Business'},{val:'saas',label:'SaaS / Software'},{val:'other',label:'Other'}
+      ]},
+      { type:'text', key:'biz_industry', label:'Industry / Niche', ph:'e.g. Health & Fitness, B2B Software' }
+    ],
+    financials: [
+      { type:'opts', key:'fin_revenue', label:'Current Annual Revenue', cols:3, opts:[
+        {val:'<100k',label:'Under $100k'},{val:'100-500k',label:'$100k–$500k'},{val:'500k-1m',label:'$500k–$1M'},{val:'1-3m',label:'$1M–$3M'},{val:'3-10m',label:'$3M–$10M'},{val:'10m+',label:'$10M+'}
+      ]},
+      { type:'text', key:'fin_target', label:'Revenue Target (12 months)', ph:'e.g. $2M' },
+      { type:'opts', key:'fin_adspend', label:'Monthly Ad Spend', cols:3, opts:[
+        {val:'none',label:'None'},{val:'<2k',label:'< $2k'},{val:'2-10k',label:'$2k–$10k'},{val:'10-30k',label:'$10k–$30k'},{val:'30k+',label:'$30k+'}
+      ]},
+      { type:'textarea', key:'fin_goals', label:'Primary Business Goals', ph:'What does success look like in the next 12 months?' }
+    ],
+    brand: [
+      { type:'textarea', key:'brand_desc', label:'How do they describe their brand?', ph:'What makes them different? What do they stand for?' },
+      { type:'textarea', key:'brand_usp', label:'Unique Selling Proposition', ph:'Why do customers choose them over competitors?' },
+      { type:'opts', key:'brand_stage', label:'Brand Maturity Stage', cols:2, opts:[
+        {val:'startup',label:'Startup (0–2 years, building awareness)'},{val:'growth',label:'Growth (2–5 years, scaling)'},{val:'established',label:'Established (5+ years, optimising)'},{val:'enterprise',label:'Enterprise (national/global reach)'}
+      ]}
+    ],
+    goals: [
+      { type:'textarea', key:'goals_primary', label:'Primary Goal', ph:'e.g. Double revenue, launch in new market, build team' },
+      { type:'text', key:'goals_timeline', label:'Timeline to achieve', ph:'e.g. 12 months, Q4 this year' },
+      { type:'textarea', key:'goals_secondary', label:'Secondary Goals', ph:'Other things they want to achieve' }
+    ],
+    obstacles: [
+      { type:'textarea', key:'obs_main', label:'Biggest obstacle to growth?', ph:'What\\'s the #1 thing holding them back?' },
+      { type:'textarea', key:'obs_tried', label:'What have they already tried?', ph:'Agencies, tools, campaigns, hiring — what didn\\'t work?' },
+      { type:'textarea', key:'obs_internal', label:'Internal constraints?', ph:'Budget, team capacity, tech limitations, stakeholders?' }
+    ],
+    personas: [
+      { type:'textarea', key:'persona_who', label:'Who is their ideal customer?', ph:'Demographics, role, income, location, behaviour' },
+      { type:'textarea', key:'persona_why', label:'Why do they buy?', ph:'Emotional and rational triggers' },
+      { type:'textarea', key:'persona_journey', label:'Buying journey', ph:'How do they find the business? What\\'s the path to purchase?' }
+    ],
+    painpoints: [
+      { type:'textarea', key:'pain_customer', label:'Customer pain points', ph:'What problems do their customers have before buying?' },
+      { type:'textarea', key:'pain_dream', label:'Dream outcome for the customer', ph:'What transformation do they promise?' }
+    ],
+    objections: [
+      { type:'textarea', key:'obj_main', label:'Top sales objections', ph:'Price, trust, timing, alternatives — what stops people buying?' },
+      { type:'textarea', key:'obj_handle', label:'How do they handle them?', ph:'Scripts, guarantees, social proof, trials?' }
+    ],
+    products: [
+      { type:'textarea', key:'prod_main', label:'Main products/services and prices', ph:'List their key offers and pricing' },
+      { type:'text', key:'prod_best', label:'Best performing offer', ph:'What converts best or makes the most revenue?' },
+      { type:'text', key:'prod_aov', label:'Average order/transaction value', ph:'e.g. $250 per sale, $1,800 retainer' }
+    ],
+    competitors: [
+      { type:'textarea', key:'comp_main', label:'Main competitors', ph:'Top 3–5 competitors and their websites' },
+      { type:'textarea', key:'comp_diff', label:'How do they compare?', ph:'Where are they stronger? Weaker? What\\'s the gap?' }
+    ],
+    marketing: [
+      { type:'opts', key:'mkt_channels', label:'Active marketing channels', cols:3, multi:true, opts:[
+        {val:'meta',label:'Meta Ads'},{val:'google',label:'Google Ads'},{val:'seo',label:'SEO / Organic'},{val:'email',label:'Email'},{val:'social',label:'Social Media'},{val:'tiktok',label:'TikTok Ads'},{val:'youtube',label:'YouTube'},{val:'referral',label:'Referral'},{val:'none',label:'None active'}
+      ]},
+      { type:'textarea', key:'mkt_best', label:'What\\'s working?', ph:'Best performing channel or campaign' },
+      { type:'textarea', key:'mkt_worst', label:'What\\'s not working?', ph:'Channels or campaigns that have underperformed' }
+    ],
+    retention: [
+      { type:'textarea', key:'ret_strategy', label:'Retention strategy', ph:'What do they do to keep customers coming back?' },
+      { type:'text', key:'ret_ltv', label:'Average customer lifetime value', ph:'e.g. $3,500 over 12 months' },
+      { type:'textarea', key:'ret_referral', label:'Referral / word of mouth', ph:'Do they have a referral programme? How does WOM work for them?' }
+    ],
+    reviews: [
+      { type:'opts', key:'rev_where', label:'Where do reviews appear?', cols:3, multi:true, opts:[
+        {val:'google',label:'Google'},{val:'fb',label:'Facebook'},{val:'trustpilot',label:'Trustpilot'},{val:'product_hunt',label:'Product Hunt'},{val:'app_store',label:'App Store'},{val:'none',label:'Minimal/None'}
+      ]},
+      { type:'text', key:'rev_rating', label:'Average rating (if known)', ph:'e.g. 4.3/5 on Google with 120 reviews' },
+      { type:'textarea', key:'rev_themes', label:'Common positive and negative themes', ph:'What do customers praise? What do they complain about?' }
+    ]
   };
+  return f[sectionId] || [];
+}
 
-  fetch('/generate', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload)
-  }).then(function(resp) {
-    if (!resp.ok) throw new Error('Server responded ' + resp.status);
-    var reader = resp.body.getReader();
-    var dec = new TextDecoder();
-    var buf = '';
-    function pump() {
-      reader.read().then(function(r) {
-        if (r.done) return;
-        buf += dec.decode(r.value, {stream: true});
-        var parts = buf.split('\\n\\n'); buf = parts.pop();
-        parts.forEach(function(part) {
-          if (!part.startsWith('data: ')) return;
-          try {
-            var evt = JSON.parse(part.slice(6));
-            if (evt.step === 'progress') setProgress(evt.pct || 0);
-            else if (evt.step === 'result') renderReport(evt.report, evt.ahrefs, evt.clientName, evt.domain, evt.agency);
-            else if (evt.step === 'error') {
-              rw.innerHTML = '<div class="loading-state"><h3 style="color:#ff8080">Error</h3>'
-                + '<p>' + escHtml(evt.msg || 'Unknown error') + '</p>'
-                + '<div style="margin-top:16px"><button class="btn btn-ghost" onclick="backToQuestionnaire()">← Back</button></div></div>';
-            }
-          } catch(e) {}
-        });
-        pump();
+var sections = [];
+var domainPulled = false;
+
+function buildSections() {
+  sections = getSections();
+}
+
+function renderSection(idx) {
+  state.currentSection = idx;
+  var sec = sections[idx];
+  var total = sections.length;
+  document.getElementById('progressFill').style.width = Math.round((idx/total)*100)+'%';
+  document.getElementById('progressLabel').textContent = 'Section '+(idx+1)+' of '+total;
+
+  // Build tabs
+  var tabsHtml = '';
+  sections.forEach(function(s,i) {
+    var done = i < idx;
+    var active = i === idx;
+    tabsHtml += '<div class="tab '+(active?'active':done?'done':'')+'" onclick="jumpSection('+i+')"><span class="dot"></span>'+s.title+'</div>';
+  });
+  document.getElementById('tabsBar').innerHTML = tabsHtml;
+
+  // Build fields
+  var fields = getFields(sec.id);
+  var html = '<div class="sec-hd"><div class="sec-num">'+(idx+1)+'</div><div class="sec-title">'+sec.title+'</div><div class="sec-sub">'+sec.sub+'</div></div>';
+  fields.forEach(function(f) {
+    html += renderField(f, sec.id);
+  });
+  html += '<div class="nav-row">';
+  html += idx > 0 ? '<button class="btn-back" onclick="prevSection()">← Back</button>' : '<div></div>';
+  html += idx < sections.length - 1
+    ? '<button class="btn-next" onclick="nextSection()">Continue →</button>'
+    : '<button class="btn-next" onclick="goToAhrefs()">Pull Live Data →</button>';
+  html += '</div>';
+  document.getElementById('sectionContent').innerHTML = html;
+  restoreAnswers(sec.id);
+  document.getElementById('sectionContent').scrollTop = 0;
+  window.scrollTo(0,0);
+}
+
+function renderField(f, secId) {
+  var key = secId+'_'+f.key;
+  var html = '<div class="fg"><label class="fl">'+f.label+'</label>';
+  if (f.type === 'text') {
+    html += '<input class="fi" id="'+key+'" placeholder="'+(f.ph||'')+'" onchange="saveAnswer(\\''+secId+'\\',\\''+f.key+'\\',this.value)">';
+  } else if (f.type === 'textarea') {
+    html += '<textarea class="ft" id="'+key+'" placeholder="'+(f.ph||'')+'" onchange="saveAnswer(\\''+secId+'\\',\\''+f.key+'\\',this.value)"></textarea>';
+  } else if (f.type === 'opts') {
+    var cols = f.cols || 2;
+    html += '<div class="opt-grid cols'+cols+'">';
+    f.opts.forEach(function(o) {
+      html += '<div class="opt-card" id="opt_'+key+'_'+o.val+'" onclick="selectOpt(\\''+secId+'\\',\\''+f.key+'\\',\\''+o.val+'\\','+(f.multi?'true':'false')+')"><div class="opt-card-title">'+o.label+'</div></div>';
+    });
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function saveAnswer(secId, key, val) {
+  if (!state.answers[secId]) state.answers[secId] = {};
+  state.answers[secId][key] = val;
+}
+
+function selectOpt(secId, key, val, multi) {
+  if (!state.answers[secId]) state.answers[secId] = {};
+  var id = secId+'_'+key;
+  if (multi) {
+    var cur = state.answers[secId][key] || [];
+    if (!Array.isArray(cur)) cur = [cur];
+    var idx = cur.indexOf(val);
+    if (idx >= 0) { cur.splice(idx,1); } else { cur.push(val); }
+    state.answers[secId][key] = cur;
+    // update UI
+    var allOpts = document.querySelectorAll('[id^="opt_'+id+'_"]');
+    allOpts.forEach(function(el) { el.classList.remove('selected'); });
+    cur.forEach(function(v) {
+      var el = document.getElementById('opt_'+id+'_'+v);
+      if (el) el.classList.add('selected');
+    });
+  } else {
+    state.answers[secId][key] = val;
+    var allOpts = document.querySelectorAll('[id^="opt_'+id+'_"]');
+    allOpts.forEach(function(el) { el.classList.remove('selected'); });
+    var el = document.getElementById('opt_'+id+'_'+val);
+    if (el) el.classList.add('selected');
+  }
+}
+
+function restoreAnswers(secId) {
+  var ans = state.answers[secId] || {};
+  var fields = getFields(secId);
+  fields.forEach(function(f) {
+    var key = secId+'_'+f.key;
+    var val = ans[f.key];
+    if (!val) return;
+    if (f.type === 'text' || f.type === 'textarea') {
+      var el = document.getElementById(key);
+      if (el) el.value = val;
+    } else if (f.type === 'opts') {
+      var vals = Array.isArray(val) ? val : [val];
+      vals.forEach(function(v) {
+        var el = document.getElementById('opt_'+key+'_'+v);
+        if (el) el.classList.add('selected');
       });
     }
-    pump();
-  }).catch(function(err) {
-    rw.innerHTML = '<div class="loading-state"><h3 style="color:#ff8080">Could not connect</h3>'
-      + '<p style="color:var(--muted)">Check the server is running.<br><small>' + escHtml(err.message) + '</small></p>'
-      + '<div style="margin-top:16px"><button class="btn btn-ghost" onclick="backToQuestionnaire()">← Back</button></div></div>';
   });
 }
 
-// ─── RENDER REPORT ────────────────────────────────────────────────────────────
-var currentSlide = 0;
+function jumpSection(idx) { saveCurrentTextareas(); renderSection(idx); }
+function nextSection() { saveCurrentTextareas(); if (state.currentSection < sections.length-1) renderSection(state.currentSection+1); }
+function prevSection() { saveCurrentTextareas(); if (state.currentSection > 0) renderSection(state.currentSection-1); }
+function goBack() { showScreen('questionScreen'); renderSection(sections.length-1); }
 
-function renderReport(report, ahrefs, clientName, domain, agencyOverride) {
-  var ag = agencyOverride || state.agency;
-  var agencyName = ag.name || 'Your Agency';
-  var accent = ag.color || '#3cc168';
-  var logoDataUrl = ag.logoDataUrl || state.agency.logoDataUrl || '';
-  var logoSessionId = ag.logoSessionId || state.agency.logoSessionId || '';
-  currentSlide = 0;
-
-  var slides = buildSlides(report, ahrefs, clientName, domain, agencyName, accent, logoDataUrl, logoSessionId);
-
-  // Slide nav
-  var navHtml = '';
-  slides.forEach(function(s, i) {
-    navHtml += '<span style="display:inline-block;padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;letter-spacing:.04em;cursor:pointer;border:1px solid ' + (i === 0 ? accent : 'var(--border)') + ';color:' + (i === 0 ? accent : 'var(--muted)') + ';margin-right:6px;transition:all .15s" id="sn_' + i + '" onclick="goSlide(' + i + ')">' + escHtml(s.label) + '</span>';
-  });
-  document.getElementById('slideNavWrap').innerHTML = navHtml;
-  document.getElementById('slideNavWrap').style.display = 'block';
-
-  var slidesHtml = '<div style="max-width:960px;margin:0 auto;padding:24px 20px 60px">';
-  slides.forEach(function(s, i) {
-    slidesHtml += '<div class="slide' + (i === 0 ? ' active' : '') + '" id="slide_' + i + '">' + s.content + '</div>';
-  });
-  slidesHtml += '</div>';
-  document.getElementById('reportWrap').innerHTML = slidesHtml;
-  document.getElementById('exportBar').style.display = 'flex';
-  document.getElementById('progressDisplay').innerHTML = '<span style="font-size:13px;color:var(--muted)">' + slides.length + ' slides</span>';
-
-  window._reportData = { report, ahrefs, clientName, domain, agencyName, accent, logoDataUrl };
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'ArrowRight') goSlide(currentSlide + 1);
-    if (e.key === 'ArrowLeft') goSlide(currentSlide - 1);
+function saveCurrentTextareas() {
+  var sec = sections[state.currentSection];
+  var fields = getFields(sec.id);
+  fields.forEach(function(f) {
+    var key = sec.id+'_'+f.key;
+    var el = document.getElementById(key);
+    if (el && (f.type === 'text' || f.type === 'textarea')) {
+      saveAnswer(sec.id, f.key, el.value);
+    }
   });
 }
 
-function goSlide(i) {
-  var slides = document.querySelectorAll('.slide');
-  if (i < 0 || i >= slides.length) return;
-  document.querySelectorAll('.slide').forEach(function(s){ s.classList.remove('active'); });
-  slides[i].classList.add('active');
-  var accent = (state.agency.color || '#3cc168');
-  document.querySelectorAll('[id^="sn_"]').forEach(function(el) {
-    el.style.borderColor = 'var(--border)'; el.style.color = 'var(--muted)';
-  });
-  var active = document.getElementById('sn_' + i);
-  if (active) { active.style.borderColor = accent; active.style.color = accent; active.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'}); }
-  currentSlide = i;
-  window.scrollTo(0, 60);
+function goToAhrefs() {
+  saveCurrentTextareas();
+  // Pre-fill domain from client section
+  var biz_url = (state.answers.client || {}).biz_url || '';
+  if (biz_url) {
+    document.getElementById('domainInput').value = biz_url.replace(/https?:\\/\\//,'').replace(/\\/.*$/,'');
+  }
+  showScreen('ahrefsScreen');
 }
 
-// ─── LOGO HTML HELPER ─────────────────────────────────────────────────────────
-function logoHtml(logoDataUrl, logoSessionId, size, radius, initials, bg) {
-  var s = size || 40; var r = radius || 8;
-  var style = 'width:' + s + 'px;height:' + s + 'px;border-radius:' + r + 'px;overflow:hidden;display:flex;align-items:center;justify-content:center;flex-shrink:0;';
-  if (logoDataUrl) {
-    return '<div style="' + style + '"><img src="' + logoDataUrl + '" style="width:100%;height:100%;object-fit:cover"></div>';
-  } else if (logoSessionId) {
-    return '<div style="' + style + '"><img src="/logo/' + logoSessionId + '" style="width:100%;height:100%;object-fit:cover" onerror="this.parentNode.innerHTML=\\'' + escHtml(initials||'A') + '\\'"></div>';
+// ─── AHREFS ──────────────────────────────────────────────────────────────────
+var ahrefsData = {};
+
+async function pullAhrefsData() {
+  var domain = document.getElementById('domainInput').value.trim().replace(/https?:\\/\\//,'').replace(/\\/.*$/,'');
+  if (!domain) { showToast('Please enter a domain', 'error'); return; }
+  document.getElementById('pullBtn').disabled = true;
+  document.getElementById('ahrefsStatus').innerHTML = '<div class="status-pill loading"><span class="pulse">●</span> Fetching data from Ahrefs...</div>';
+  document.getElementById('ahrefsResults').style.display = 'none';
+
+  try {
+    var date = getAhrefsDate();
+    var results = await Promise.allSettled([
+      callAhrefs('/site-explorer/domain-rating', { target: domain, date: date }),
+      callAhrefs('/site-explorer/metrics', { target: domain, date: date }),
+      callAhrefs('/site-explorer/backlinks-stats', { target: domain, date: date }),
+      callAhrefs('/site-explorer/organic-keywords', { target: domain, date: date, limit: 8, order_by: 'sum_traffic:desc', select: 'keyword,best_position,volume,sum_traffic', mode:'subdomains' }),
+      callAhrefs('/site-explorer/organic-competitors', { target: domain, date: date, limit: 6, select:'competitor_domain,domain_rating,traffic,keywords_common', order_by:'traffic:desc' })
+    ]);
+
+    ahrefsData = {
+      domain: domain,
+      dr: safeGet(results[0], 'domain_rating.domain_rating'),
+      org_traffic: safeGet(results[1], 'metrics.org_traffic'),
+      org_keywords: safeGet(results[1], 'metrics.org_keywords'),
+      paid_traffic: safeGet(results[1], 'metrics.paid_traffic'),
+      paid_keywords: safeGet(results[1], 'metrics.paid_keywords'),
+      backlinks: safeGet(results[2], 'metrics.live'),
+      refdomains: safeGet(results[2], 'metrics.live_refdomains'),
+      keywords: safeGet(results[3], 'keywords') || [],
+      competitors: safeGet(results[4], 'competitors') || []
+    };
+    state.ahrefsData = ahrefsData;
+
+    renderAhrefsResults(domain);
+    domainPulled = true;
+    document.getElementById('ahrefsStatus').innerHTML = '<div class="status-pill done">✓ Data pulled for '+domain+'</div>';
+    document.getElementById('ahrefsResults').style.display = '';
+  } catch(e) {
+    document.getElementById('ahrefsStatus').innerHTML = '<div class="status-pill err">✗ Error pulling data — check domain and try again</div>';
+    console.error(e);
   }
-  return '<div style="' + style + 'background:' + (bg||'#3cc168') + ';font-weight:700;font-size:' + Math.round(s*0.35) + 'px;color:#071a0e">' + escHtml(initials||'A') + '</div>';
+  document.getElementById('pullBtn').disabled = false;
 }
 
-// ─── SLIDE BUILDER ────────────────────────────────────────────────────────────
-function buildSlides(report, ahrefs, clientName, domain, agencyName, accent, logoDataUrl, logoSessionId) {
-  var A = accent || '#3cc168';
-  var today = new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
-  var slides = [];
-  var initials = agencyName.split(' ').slice(0,2).map(function(w){return w[0];}).join('').toUpperCase() || 'A';
+function safeGet(result, path) {
+  try {
+    if (result.status !== 'fulfilled') return null;
+    var val = result.value;
+    path.split('.').forEach(function(k){ val = val[k]; });
+    return val;
+  } catch(e) { return null; }
+}
 
-  function card(content) { return '<div style="background:var(--card);border-radius:12px;padding:28px;margin-bottom:14px">' + content + '</div>'; }
-  function sh(title, sub) {
-    return '<div style="border-left:3px solid ' + A + ';padding-left:16px;margin-bottom:22px">'
-      + '<div style="font-size:20px;font-weight:700">' + escHtml(title) + '</div>'
-      + (sub ? '<div style="font-size:13px;color:var(--muted);margin-top:3px">' + escHtml(sub) + '</div>' : '')
-      + '</div>';
-  }
-  function grid(cols, content) { return '<div style="display:grid;grid-template-columns:' + cols + ';gap:14px;margin-bottom:14px">' + content + '</div>'; }
-  function metBox(val, label, sub, color) {
-    return '<div style="background:#071a0e;border-radius:10px;padding:18px;text-align:center">'
-      + '<div style="font-size:26px;font-weight:800;color:' + (color || A) + '">' + escHtml(String(val === null || val === undefined ? '—' : val)) + '</div>'
-      + '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:5px">' + escHtml(label) + '</div>'
-      + (sub ? '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + escHtml(sub) + '</div>' : '')
-      + '</div>';
-  }
-  function pill(text, type) {
-    var styles = { good:'background:#0d3320;color:var(--green-light)', warn:'background:#2a2000;color:#ffd580', bad:'background:#2a0a0a;color:#ff8080' };
-    return '<span style="' + (styles[type] || styles.warn) + ';font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;padding:3px 9px;border-radius:10px;flex-shrink:0">' + escHtml(text) + '</span>';
-  }
-  function tag(text, color) {
-    return '<span style="background:' + color + '22;color:' + color + ';font-size:11px;font-weight:600;padding:3px 10px;border-radius:8px;border:1px solid ' + color + '44;white-space:nowrap">' + escHtml(text) + '</span>';
-  }
-  function scoreBar(label, score, note) {
-    var s = Math.min(100, Math.max(0, parseInt(score) || 0));
-    var color = s >= 70 ? A : s >= 40 ? '#ffd580' : '#ff6b6b';
-    return '<div style="margin-bottom:14px">'
-      + '<div style="display:flex;justify-content:space-between;margin-bottom:5px">'
-      + '<span style="font-size:13px;font-weight:500">' + escHtml(label) + '</span>'
-      + '<span style="font-size:14px;font-weight:700;color:' + color + '">' + s + '/100</span>'
-      + '</div><div style="height:6px;background:#071a0e;border-radius:3px">'
-      + '<div style="height:6px;width:' + s + '%;background:' + color + ';border-radius:3px"></div></div>'
-      + (note ? '<div style="font-size:11px;color:var(--muted);margin-top:4px">' + escHtml(note) + '</div>' : '')
-      + '</div>';
-  }
+async function callAhrefs(endpoint, params) {
+  // Uses Claude's connected Ahrefs MCP — this call reaches through to the Ahrefs API via the Claude environment
+  var url = 'https://api.ahrefs.com/v3' + endpoint + '?' + Object.keys(params).map(function(k){ return k+'='+encodeURIComponent(params[k]); }).join('&');
+  var resp = await fetch(url, { headers: { 'Authorization': 'Bearer __AHREFS_API_KEY__' } });
+  if (!resp.ok) throw new Error('Ahrefs error: ' + resp.status);
+  return await resp.json();
+}
 
-  var agLogoHtml = logoHtml(logoDataUrl, logoSessionId, 44, 8, initials, A);
-  var agLogoSmall = logoHtml(logoDataUrl, logoSessionId, 28, 6, initials, A);
+function getAhrefsDate() {
+  var d = new Date();
+  d.setDate(d.getDate() - 30);
+  return d.toISOString().slice(0,10);
+}
 
-  // Report footer for light slides
-  function slideFooter() {
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:#f5f5f3;border-top:1px solid #e8e8e0;margin-top:4px">'
-      + '<div style="display:flex;align-items:center;gap:8px">'
-      + logoHtml(logoDataUrl, logoSessionId, 22, 4, initials, A)
-      + '<span style="font-size:12px;font-weight:600;color:#444">' + escHtml(agencyName) + '</span>'
-      + '</div>'
-      + '<span style="font-size:11px;color:#aaa">' + escHtml(clientName) + ' — Brand Diagnostic — ' + today + '</span>'
-      + '</div>';
-  }
+function fmt(n) {
+  if (n == null) return 'N/A';
+  if (n >= 1000000) return (n/1000000).toFixed(1)+'M';
+  if (n >= 1000) return (n/1000).toFixed(1)+'K';
+  return String(n);
+}
 
-  var dr = ahrefs.domain_rating || 0;
-  var orgT = ahrefs.org_traffic || 0;
-  var orgK = ahrefs.org_keywords || 0;
-  var orgK13 = ahrefs.org_keywords_1_3 || 0;
-  var paidT = ahrefs.paid_traffic || 0;
-  var paidK = ahrefs.paid_keywords || 0;
-  var blLive = ahrefs.backlinks_live || 0;
-  var blRD = ahrefs.ref_domains || 0;
-  var keywords = ahrefs.keywords || [];
-  var competitors = ahrefs.competitors || [];
-  var topPages = ahrefs.top_pages || [];
+function renderAhrefsResults(domain) {
+  var d = ahrefsData;
+  var dr = d.dr != null ? d.dr : null;
+  var orgTraffic = d.org_traffic != null ? d.org_traffic : null;
+  var paidTraffic = d.paid_traffic != null ? d.paid_traffic : null;
 
-  // ── SLIDE 1: COVER ──
-  slides.push({ label: 'Cover', content:
-    '<div style="background:linear-gradient(135deg,#071a0e 0%,#0a2e15 50%,#071a0e 100%);min-height:520px;border-radius:14px;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:space-between;padding:48px">'
-    + '<div style="position:absolute;width:420px;height:420px;border-radius:50%;border:1px solid ' + A + '20;top:-100px;right:-100px"></div>'
-    + '<div style="position:absolute;width:220px;height:220px;border-radius:50%;border:1px solid ' + A + '30;top:60px;right:80px"></div>'
-    + '<div style="position:absolute;width:100px;height:100px;border-radius:50%;background:' + A + '08;bottom:80px;right:200px"></div>'
-    + '<div style="display:flex;align-items:center;gap:12px;position:relative;z-index:2">'
-    + agLogoHtml
-    + '<div>'
-    + '<div style="font-size:14px;font-weight:700;color:' + A + ';letter-spacing:.04em">' + escHtml(agencyName) + '</div>'
-    + (state.agency.tagline ? '<div style="font-size:11px;color:rgba(255,255,255,.4)">' + escHtml(state.agency.tagline) + '</div>' : '')
-    + '</div></div>'
-    + '<div style="position:relative;z-index:2">'
-    + '<div style="font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:' + A + ';margin-bottom:14px">' + escHtml(state.mode === 'quick' ? 'Quick Diagnostic — $500' : 'Deep Workshop Diagnostic — $1,000–$1,500') + '</div>'
-    + '<div style="font-family:\'DM Serif Display\',serif;font-size:52px;font-weight:900;line-height:1;color:#fff;margin-bottom:8px">Brand<br>Diagnostic</div>'
-    + '<div style="width:48px;height:4px;background:' + A + ';border-radius:99px;margin-bottom:20px"></div>'
-    + '<div style="font-size:13px;color:rgba(255,255,255,.4);margin-bottom:4px">Prepared for</div>'
-    + '<div style="font-size:32px;font-weight:800;color:#fff">' + escHtml(clientName) + '</div>'
-    + (domain ? '<div style="font-size:14px;color:' + A + ';margin-top:6px">' + escHtml(domain) + '</div>' : '')
-    + '<div style="font-size:12px;color:rgba(255,255,255,.3);margin-top:14px">' + today + '</div>'
-    + '</div></div>'
+  // Signals
+  var signals = [];
+  if (dr != null && dr < 20) signals.push({type:'gap', icon:'⚠️', title:'Low domain authority (DR '+dr+')', desc:'Authority is well below the competitive threshold — link building is a critical priority.'});
+  if (orgTraffic != null && orgTraffic < 500) signals.push({type:'gap', icon:'⚠️', title:'Very low organic traffic', desc:'Organic search is not generating meaningful traffic — SEO investment required.'});
+  if (paidTraffic != null && paidTraffic === 0) signals.push({type:'gap', icon:'🚫', title:'No paid traffic detected', desc:'Ahrefs shows zero paid traffic — they are not running paid ads or campaigns are new.'});
+  if (d.backlinks != null && d.backlinks < 100) signals.push({type:'warn', icon:'⚠️', title:'Weak backlink profile ('+fmt(d.backlinks)+' links)', desc:'Fewer than 100 backlinks signals very little authority or third-party recognition.'});
+  if (orgTraffic != null && orgTraffic > 5000 && (paidTraffic == null || paidTraffic < 100)) signals.push({type:'warn', icon:'📊', title:'SEO-dependent — no paid backup', desc:'All traffic is organic. If rankings drop, revenue drops. Paid acquisition needed.'});
+  if (d.org_keywords != null && d.org_keywords > 0 && d.org_keywords < 50) signals.push({type:'warn', icon:'🔍', title:'Ranking for very few keywords ('+d.org_keywords+')', desc:'Narrow keyword footprint means limited SEO ceiling without content investment.'});
+  if (signals.length === 0) signals.push({type:'ok', icon:'✅', title:'No critical SEO gaps detected', desc:'Domain metrics look healthy. Focus on conversion and channel diversification.'});
+  state.signals = signals;
+
+  // Cards
+  var drClass = dr != null ? (dr < 20 ? 'signal-gap' : dr > 50 ? 'signal-ok' : '') : '';
+  var tClass = orgTraffic != null ? (orgTraffic < 500 ? 'signal-gap' : orgTraffic > 10000 ? 'signal-ok' : '') : '';
+  var pClass = paidTraffic === 0 ? 'signal-gap' : '';
+  document.getElementById('ahrefsCards').innerHTML =
+    card('Domain Rating', dr != null ? dr : 'N/A', 'Ahrefs DR', drClass) +
+    card('Organic Traffic', fmt(orgTraffic), 'Est. monthly visits', tClass) +
+    card('Ranking Keywords', fmt(d.org_keywords), 'Total keywords', '') +
+    card('Paid Traffic', paidTraffic === 0 ? 'None' : fmt(paidTraffic), 'From paid ads', pClass) +
+    card('Backlinks', fmt(d.backlinks), 'Total backlinks', '') +
+    card('Referring Domains', fmt(d.refdomains), 'Unique domains', '');
+
+  // Signals
+  var sHtml = '';
+  signals.forEach(function(s) {
+    sHtml += '<div class="signal-item '+s.type+'"><div class="signal-icon">'+s.icon+'</div><div class="signal-text"><strong>'+s.title+'</strong><span>'+s.desc+'</span></div></div>';
+  });
+  document.getElementById('signalList').innerHTML = sHtml;
+}
+
+function card(label, val, sub, cls) {
+  return '<div class="ahrefs-card '+cls+'"><div class="ahrefs-card-label">'+label+'</div><div class="ahrefs-card-val">'+val+'</div><div class="ahrefs-card-sub">'+sub+'</div></div>';
+}
+
+// ─── REPORT GENERATION ───────────────────────────────────────────────────────
+async function generateReport() {
+  showScreen('loadingScreen');
+
+  var steps = ['ls1','ls2','ls3','ls4','ls5'];
+  var delays = [600,1200,2000,3000,4000];
+  steps.forEach(function(id, i) {
+    setTimeout(function() {
+      steps.forEach(function(s,j) {
+        var el = document.getElementById(s);
+        if (j < i) { el.className='loading-step done'; el.textContent='✅ '+el.textContent.replace(/^[^\\s]+\\s/,''); }
+        else if (j === i) { el.className='loading-step active'; el.textContent='⟳ '+el.textContent.replace(/^[^\\s]+\\s/,''); }
+      });
+    }, delays[i]);
   });
 
-  // ── SLIDE 2: EXECUTIVE SUMMARY ──
-  slides.push({ label: 'Summary', content:
-    card(sh('Executive Summary', 'Strategic overview')
-    + grid('1fr 1fr 1fr',
-      ['Where They Are', 'Where They Want to Go', 'Our Recommended Approach'].map(function(t, i) {
-        var txt = [report.exec_past, report.exec_future, report.exec_agency][i] || '';
-        return '<div style="background:#071a0e;border-radius:10px;padding:20px">'
-          + '<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + A + ';margin-bottom:10px">' + t + '</div>'
-          + '<p style="font-size:13px;color:#ccc;line-height:1.7">' + escHtml(txt) + '</p></div>';
-      }).join('')
-    ))
-    + slideFooter()
-  });
-
-  // ── SLIDE 3: HEALTH SCORECARD ──
-  var hs = report.health_scores || { seo:0, paid:0, content:0, brand:0, conversion:0, retention:0 };
-  var hn = report.health_notes || {};
-  var hsKeys = ['seo','paid','content','brand','conversion','retention'];
-  var overall = Math.round(hsKeys.reduce(function(a,k){ return a + (hs[k] || 0); }, 0) / hsKeys.length);
-  var overallColor = overall >= 60 ? A : overall >= 35 ? '#ffd580' : '#ff6b6b';
-  slides.push({ label: 'Health', content:
-    card(sh('Performance Health Scorecard', 'Scored from questionnaire + live Ahrefs signals')
-    + '<div style="display:grid;grid-template-columns:160px 1fr;gap:24px">'
-    + '<div style="background:#071a0e;border-radius:12px;padding:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">'
-    + '<div style="font-size:58px;font-weight:900;color:' + overallColor + '">' + overall + '</div>'
-    + '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:4px">Overall</div>'
-    + '<div style="font-size:11px;color:var(--muted)">out of 100</div>'
-    + '</div><div>'
-    + ['SEO', 'Paid Ads', 'Content', 'Brand', 'Conversion', 'Retention'].map(function(l, i) {
-        return scoreBar(l, hs[hsKeys[i]] || 0, hn[hsKeys[i]] || '');
-      }).join('')
-    + '</div></div>')
-    + slideFooter()
-  });
-
-  // ── SLIDE 4: DIGITAL POSITION ──
-  var signals = (report.digital_analysis || {}).signals || [];
-  slides.push({ label: 'Digital', content:
-    card(sh('Digital Position', 'Live Ahrefs data · ' + escHtml(domain))
-    + grid('repeat(4,1fr)',
-      metBox(dr || '—', 'Domain Rating', '0–100 authority', dr < 20 ? '#ff6b6b' : A)
-      + metBox(orgT ? orgT.toLocaleString() : '0', 'Organic Traffic', 'Monthly visits', '')
-      + metBox(orgK ? orgK.toLocaleString() : '0', 'Keywords', 'Top 100 rankings', '')
-      + metBox(orgK13 || 0, 'Top 3 Rankings', 'High-intent', orgK13 > 0 ? A : '#ff6b6b')
-    )
-    + grid('repeat(4,1fr)',
-      metBox(paidT ? paidT.toLocaleString() : '0', 'Paid Traffic', paidT > 0 ? 'Active paid ads' : 'No paid ads', paidT > 0 ? A : '#ff6b6b')
-      + metBox(paidK ? paidK.toLocaleString() : '0', 'Paid Keywords', paidK > 0 ? 'Active' : 'None', paidK > 0 ? A : 'var(--muted)')
-      + metBox(blLive ? blLive.toLocaleString() : '0', 'Backlinks', 'Live links', '#ffd580')
-      + metBox(blRD ? blRD.toLocaleString() : '0', 'Ref. Domains', 'Unique linking', '#ffd580')
-    )
-    + (signals.length ? '<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + A + ';margin-bottom:10px">Detected Signals</div>'
-      + signals.map(function(s) {
-        return '<div style="background:#071a0e;border-radius:8px;padding:12px 14px;display:flex;gap:12px;align-items:center;margin-bottom:8px">'
-          + '<div style="flex:1"><div style="font-size:13px;font-weight:600">' + escHtml(s.label || '') + '</div>'
-          + (s.value ? '<div style="font-size:13px;color:' + A + ';font-weight:700">' + escHtml(s.value) + '</div>' : '')
-          + '<div style="font-size:12px;color:var(--muted)">' + escHtml(s.insight || '') + '</div></div>'
-          + pill(s.status || 'warn', s.status || 'warn') + '</div>';
-      }).join('') : ''))
-    + slideFooter()
-  });
-
-  // ── SLIDE 5: SEO KEYWORDS ──
-  var kwTable = keywords.length
-    ? '<table style="width:100%;border-collapse:collapse;font-size:12px">'
-      + '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px 0;color:var(--muted);font-weight:500">Keyword</th><th style="text-align:center;padding:8px;color:var(--muted);font-weight:500">Pos</th><th style="text-align:center;padding:8px;color:var(--muted);font-weight:500">Volume</th><th style="text-align:left;padding:8px;color:var(--muted);font-weight:500">Intent</th></tr>'
-      + keywords.slice(0, 10).map(function(k) {
-          var pos = k.best_position || k.position || '—';
-          var posColor = pos <= 3 ? A : pos <= 10 ? '#ffd580' : 'var(--muted)';
-          var vol = k.volume ? (k.volume >= 1000 ? (k.volume / 1000).toFixed(1) + 'k' : k.volume) : '—';
-          var intent = k.is_transactional ? 'transactional' : k.is_commercial ? 'commercial' : 'informational';
-          var intentColor = k.is_transactional ? A : k.is_commercial ? '#ffd580' : '#80c8ff';
-          return '<tr style="border-bottom:1px solid #0e2618"><td style="padding:10px 0;font-weight:500;color:#fff">' + escHtml(k.keyword || '') + '</td>'
-            + '<td style="text-align:center;color:' + posColor + ';font-weight:700">' + pos + '</td>'
-            + '<td style="text-align:center;color:var(--muted)">' + vol + '</td>'
-            + '<td style="padding:8px">' + tag(intent, intentColor) + '</td></tr>';
-        }).join('') + '</table>'
-    : '<div style="color:var(--muted);font-size:13px">No keyword data available for this domain.</div>';
-
-  slides.push({ label: 'SEO Intel', content:
-    card(sh('Keyword & SEO Intelligence', 'Organic ranking data from Ahrefs')
-    + ((report.digital_analysis || {}).keyword_opportunity
-      ? '<div style="background:#0d3320;border:1px solid ' + A + '44;border-radius:8px;padding:14px;margin-bottom:16px;display:flex;gap:10px"><div style="font-size:18px">🎯</div><div><div style="font-size:12px;font-weight:700;color:' + A + ';margin-bottom:3px">KEY OPPORTUNITY</div><div style="font-size:13px;color:#ccc">' + escHtml(report.digital_analysis.keyword_opportunity) + '</div></div></div>'
-      : '')
-    + kwTable)
-    + slideFooter()
-  });
-
-  // ── SLIDE 6: COMPETITORS ──
-  var ca = report.competitor_analysis || {};
-  var compTable = competitors.length
-    ? '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">'
-      + '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px 0;color:var(--muted);font-weight:500">Domain</th><th style="text-align:center;padding:8px;color:var(--muted);font-weight:500">DR</th><th style="text-align:center;padding:8px;color:var(--muted);font-weight:500">Traffic</th><th style="text-align:center;padding:8px;color:var(--muted);font-weight:500">Common KW</th><th style="text-align:center;padding:8px;color:var(--muted);font-weight:500">vs You</th></tr>'
-      + competitors.map(function(c) {
-          var theirDR = parseFloat(c.domain_rating || c.dr || 0);
-          var diff = Math.round(theirDR - dr);
-          var diffColor = diff > 10 ? '#ff8080' : diff < -5 ? A : '#ffd580';
-          return '<tr style="border-bottom:1px solid #0e2618"><td style="padding:10px 0;font-weight:500">' + escHtml(c.competitor_domain || c.domain || '') + '</td>'
-            + '<td style="text-align:center;color:#ffd580;font-weight:700">' + Math.round(theirDR) + '</td>'
-            + '<td style="text-align:center;color:var(--muted)">' + (c.traffic ? Number(c.traffic).toLocaleString() : '—') + '</td>'
-            + '<td style="text-align:center;color:var(--muted)">' + (c.keywords_common ? Number(c.keywords_common).toLocaleString() : '—') + '</td>'
-            + '<td style="text-align:center;color:' + diffColor + ';font-weight:600">' + (diff > 0 ? '+' : '') + diff + '</td></tr>';
-        }).join('') + '</table>'
-    : '<div style="color:var(--muted);font-size:13px;margin-bottom:16px">No competitor data returned for this domain.</div>';
-
-  slides.push({ label: 'Competitors', content:
-    card(sh('Competitor Analysis', 'Market position intelligence')
-    + (ca.summary ? '<div style="background:#071a0e;border-radius:8px;padding:16px;margin-bottom:14px"><p style="font-size:13px;color:#ccc;line-height:1.7">' + escHtml(ca.summary) + '</p></div>' : '')
-    + compTable
-    + grid('1fr 1fr 1fr',
-      '<div style="background:#071a0e;border-radius:10px;padding:16px"><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:' + A + ';margin-bottom:8px">Your Advantages</div>'
-      + (ca.strengths_vs_competitors || []).map(function(s) { return '<div style="font-size:12px;color:#ccc;padding:3px 0"><span style="color:' + A + '">+ </span>' + escHtml(s) + '</div>'; }).join('') + '</div>'
-      + '<div style="background:#071a0e;border-radius:10px;padding:16px"><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ff8080;margin-bottom:8px">Areas to Close</div>'
-      + (ca.weaknesses_vs_competitors || []).map(function(s) { return '<div style="font-size:12px;color:#ccc;padding:3px 0"><span style="color:#ff8080">- </span>' + escHtml(s) + '</div>'; }).join('') + '</div>'
-      + '<div style="background:#071a0e;border-radius:10px;padding:16px"><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ffd580;margin-bottom:8px">Market Gaps</div>'
-      + (ca.market_gaps || []).map(function(s) { return '<div style="font-size:12px;color:#ccc;padding:3px 0"><span style="color:#ffd580">&gt; </span>' + escHtml(s) + '</div>'; }).join('') + '</div>'
-    ))
-    + slideFooter()
-  });
-
-  // ── SLIDE 7: REPUTATION ──
-  var ri = report.review_insights || {};
-  var research = report.web_research || {};
-  var sentColor = ri.overall_sentiment === 'positive' ? A : ri.overall_sentiment === 'negative' ? '#ff6b6b' : '#ffd580';
-  slides.push({ label: 'Reputation', content:
-    card(sh('Brand Reputation & Reviews', 'Customer sentiment and brand signals')
-    + grid('1fr 2fr',
-      '<div style="background:#071a0e;border-radius:12px;padding:20px;text-align:center;display:flex;flex-direction:column;align-items:center;justify-content:center">'
-      + '<div style="font-size:36px;font-weight:900;color:' + sentColor + ';text-transform:capitalize">' + escHtml(ri.overall_sentiment || 'Unknown') + '</div>'
-      + '<div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:6px">Sentiment</div>'
-      + (ri.avg_rating ? '<div style="font-size:22px;font-weight:700;color:#ffd580;margin-top:10px">' + escHtml(ri.avg_rating) + '</div>' : '')
-      + '</div>'
-      + '<div><div style="background:#071a0e;border-radius:10px;padding:16px;margin-bottom:12px">'
-      + '<p style="font-size:13px;color:#ccc;line-height:1.6">' + escHtml(research.review_summary || ri.recommendation || 'No review data available.') + '</p>'
-      + '</div>'
-      + (ri.key_themes && ri.key_themes.length ? '<div style="display:flex;flex-wrap:wrap;gap:8px">' + ri.key_themes.map(function(t){ return tag(t, A); }).join('') + '</div>' : '')
-      + '</div>'
-    )
-    + grid('1fr 1fr',
-      '<div style="background:#071a0e;border-radius:10px;padding:16px"><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:' + A + ';margin-bottom:8px">What Customers Praise</div>'
-      + (ri.trust_signals || research.common_praise || []).map(function(s) { return '<div style="font-size:12px;color:#ccc;padding:2px 0">• ' + escHtml(s) + '</div>'; }).join('') + '</div>'
-      + '<div style="background:#071a0e;border-radius:10px;padding:16px"><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ff8080;margin-bottom:8px">Common Complaints</div>'
-      + (ri.reputation_risks || research.common_complaints || []).map(function(s) { return '<div style="font-size:12px;color:#ccc;padding:2px 0">• ' + escHtml(s) + '</div>'; }).join('') + '</div>'
-    ))
-    + slideFooter()
-  });
-
-  // ── SLIDE 8: PERSONAS ──
-  var personas = report.personas || [];
-  var persHtml = personas.map(function(p) {
-    return '<div style="background:#071a0e;border-radius:12px;padding:22px;margin-bottom:14px">'
-      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px">'
-      + '<div><div style="font-size:18px;font-weight:700">' + escHtml(p.name || '') + '</div>'
-      + '<div style="font-size:13px;color:var(--muted);margin-top:2px">' + escHtml(p.tagline || p.who || '') + '</div></div>'
-      + (p.messaging_hook ? '<div style="background:' + A + '15;border-left:3px solid ' + A + ';padding:12px 14px;border-radius:0 8px 8px 0;max-width:280px">'
-        + '<div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:' + A + ';margin-bottom:3px">Messaging Hook</div>'
-        + '<div style="font-size:13px;color:#fff;font-style:italic">' + escHtml(p.messaging_hook) + '</div></div>' : '')
-      + '</div>'
-      + grid('1fr 1fr 1fr',
-        '<div><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:' + A + ';margin-bottom:6px">Dream Outcome</div><p style="font-size:12px;color:#ccc;line-height:1.5">' + escHtml(p.dream_outcome || '') + '</p></div>'
-        + '<div><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ff8080;margin-bottom:6px">Pain Points</div>'
-        + (p.pains || []).map(function(x){ return '<div style="font-size:12px;color:#ccc;padding:2px 0">• ' + escHtml(x) + '</div>'; }).join('') + '</div>'
-        + '<div><div style="font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:6px">Objections</div>'
-        + (p.objections || []).map(function(x){ return '<div style="font-size:12px;color:#ccc;padding:2px 0">• ' + escHtml(x) + '</div>'; }).join('') + '</div>'
-      ) + '</div>';
-  }).join('');
-  slides.push({ label: 'Personas', content: card(sh('Customer Avatar', 'Who you are speaking to and what drives them') + persHtml) + slideFooter() });
-
-  // ── SLIDE 9: GAP ANALYSIS ──
-  var gaps = report.gap_analysis || [];
-  var catColors = { SEO: A, Paid:'#80c8ff', Content:'#ffd580', Brand:'#ff8080', CRO:'#c084fc', Retention:'#fb923c', Strategy:'#34d399' };
-  var highGaps = gaps.filter(function(g){ return g.priority === 'high'; });
-  var otherGaps = gaps.filter(function(g){ return g.priority !== 'high'; });
-  function gapCard(g, i) {
-    var col = catColors[g.category] || A;
-    return '<div style="background:#071a0e;border-radius:10px;padding:16px;border-left:3px solid ' + col + '">'
-      + '<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;gap:8px">'
-      + '<div style="display:flex;gap:8px;align-items:center">'
-      + '<div style="width:22px;height:22px;border-radius:50%;background:' + col + ';color:#071a0e;font-weight:800;font-size:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0">' + (i + 1) + '</div>'
-      + '<div style="font-size:14px;font-weight:700">' + escHtml(g.title || '') + '</div>'
-      + '</div>'
-      + '<div style="display:flex;gap:6px;flex-shrink:0">' + (g.category ? tag(g.category, col) : '') + (g.quick_win ? tag('quick win', A) : '') + '</div>'
-      + '</div>'
-      + '<p style="font-size:13px;color:var(--muted);line-height:1.6">' + escHtml(g.desc || '') + '</p></div>';
-  }
-  slides.push({ label: 'Gaps', content:
-    card(sh('Gap Analysis', 'Critical gaps ranked by revenue impact')
-    + (highGaps.length ? '<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#ff8080;margin-bottom:10px">Critical / High Priority</div>'
-      + '<div style="display:grid;gap:10px;margin-bottom:16px">' + highGaps.map(gapCard).join('') + '</div>' : '')
-    + (otherGaps.length ? '<div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#ffd580;margin-bottom:10px">Medium Priority</div>'
-      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' + otherGaps.map(gapCard).join('') + '</div>' : ''))
-    + slideFooter()
-  });
-
-  // ── SLIDE 10: FORECAST ──
-  var fc = report.forecast || {};
-  slides.push({ label: 'Forecast', content:
-    card(sh('Revenue Forecast', '12-month projections and channel model')
-    + grid('1fr 1fr 1fr',
-      metBox(fc.current_revenue || '—', 'Current Position', 'Baseline', '#888')
-      + metBox(fc.conservative_12m || '—', 'Conservative 12m', 'Foundational fixes', A)
-      + metBox(fc.optimistic_12m || '—', 'Optimistic 12m', 'Full execution', '#ffd580')
-    )
-    + (fc.revenue_per_channel && fc.revenue_per_channel.length
-      ? '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:4px">'
-        + '<tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:8px 0;color:var(--muted);font-weight:500">Channel</th><th style="text-align:right;padding:8px;color:var(--muted);font-weight:500">Current</th><th style="text-align:right;padding:8px;color:var(--muted);font-weight:500">12m Potential</th></tr>'
-        + fc.revenue_per_channel.map(function(r) {
-            return '<tr style="border-bottom:1px solid #0e2618"><td style="padding:10px 0;font-weight:500">' + escHtml(r.channel || '') + '</td>'
-              + '<td style="text-align:right;color:var(--muted)">' + escHtml(r.current || '—') + '</td>'
-              + '<td style="text-align:right;color:' + A + ';font-weight:600">' + escHtml(r.potential || '—') + '</td></tr>';
-          }).join('') + '</table>' : '')
-    + (fc.key_assumptions && fc.key_assumptions.length
-      ? '<div style="background:#071a0e;border-radius:8px;padding:14px;margin-top:14px">'
-        + '<div style="font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Key Assumptions</div>'
-        + fc.key_assumptions.map(function(a) { return '<div style="font-size:12px;color:#ccc;padding:3px 0">· ' + escHtml(a) + '</div>'; }).join('')
-        + '</div>' : ''))
-    + slideFooter()
-  });
-
-  // ── SLIDE 11: ROADMAP ──
-  var rm = report.roadmap || [];
-  var phaseColors = [A, '#ffd580', '#80c8ff'];
-  slides.push({ label: 'Roadmap', content:
-    card(sh('6-Month Growth Roadmap', 'Phase-by-phase execution plan')
-    + '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">'
-    + rm.map(function(phase, pi) {
-        var col = phaseColors[pi] || A;
-        return '<div style="background:#071a0e;border-radius:10px;padding:18px">'
-          + '<div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + col + ';margin-bottom:4px">' + escHtml(phase.phase || '') + '</div>'
-          + '<div style="font-size:12px;color:var(--muted);margin-bottom:4px">' + escHtml(phase.months || '') + '</div>'
-          + '<div style="font-size:15px;font-weight:700;margin-bottom:14px">' + escHtml(phase.label || '') + '</div>'
-          + (phase.items || []).map(function(item) {
-              var t = typeof item === 'string' ? item : (item.task || '');
-              var d = typeof item === 'object' ? item.detail : '';
-              return '<div style="margin-bottom:10px"><div style="font-size:12px;color:#fff;font-weight:500;display:flex;gap:6px"><span style="color:' + col + ';font-weight:700;flex-shrink:0">→</span>' + escHtml(t) + '</div>'
-                + (d ? '<div style="font-size:11px;color:var(--muted);margin-left:14px;margin-top:2px;line-height:1.4">' + escHtml(d) + '</div>' : '') + '</div>';
-            }).join('')
-          + '</div>';
-      }).join('') + '</div>')
-    + slideFooter()
-  });
-
-  // ── SLIDE 12: CHECKLIST ──
-  var chk = report.onboarding_checklist || [];
-  var phaseGroups = {};
-  chk.forEach(function(c) { var p = c.phase || 'General'; if (!phaseGroups[p]) phaseGroups[p] = []; phaseGroups[p].push(c); });
-  var chkIdx = 0;
-  var chkHtml = '';
-  ['Foundation','Acquisition','Conversion','Retention','Scale','General'].forEach(function(ph) {
-    if (!phaseGroups[ph]) return;
-    chkHtml += '<div style="margin-bottom:20px"><div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:' + A + ';margin-bottom:8px">' + ph + '</div>';
-    phaseGroups[ph].forEach(function(c) {
-      var priColor = c.priority === 'critical' ? '#ff6b6b' : c.priority === 'high' ? '#ff8080' : c.priority === 'medium' ? '#ffd580' : A;
-      chkHtml += '<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)">'
-        + '<div class="chk" id="chk_' + chkIdx + '" onclick="toggleChk(' + chkIdx + ')" style="flex-shrink:0;margin-top:2px"></div>'
-        + '<div style="flex:1"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-        + '<div class="chk-text" id="chktxt_' + chkIdx + '">' + escHtml(c.task || '') + '</div>'
-        + tag(c.priority || 'medium', priColor)
-        + (c.owner ? tag(c.owner, 'var(--muted)') : '')
-        + (c.week ? '<span style="font-size:10px;color:var(--muted)">' + escHtml(c.week) + '</span>' : '')
-        + '</div>'
-        + (c.detail ? '<div style="font-size:12px;color:var(--muted);margin-top:3px;line-height:1.4">' + escHtml(c.detail) + '</div>' : '')
-        + '</div></div>';
-      chkIdx++;
+  try {
+    var prompt = buildPrompt();
+    var response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 4000,
+        system: 'You are a senior brand and growth strategist. Generate a detailed brand diagnostic report based on the provided data. Return ONLY valid JSON with no markdown, no code fences, no explanation text.',
+        messages: [{ role: 'user', content: prompt }]
+      })
     });
-    chkHtml += '</div>';
-  });
-  slides.push({ label: 'Checklist', content:
-    card(sh('Onboarding Checklist', 'Click to mark complete — ' + chk.length + ' tasks')
-    + '<div style="background:#071a0e;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;gap:12px;align-items:center">'
-    + '<div style="flex:1;height:6px;background:#0e2618;border-radius:3px"><div id="chkBar" style="height:6px;width:0%;background:' + A + ';border-radius:3px;transition:width .3s"></div></div>'
-    + '<div id="chkCount" style="font-size:12px;color:var(--muted);white-space:nowrap">0 / ' + chk.length + ' complete</div></div>'
-    + chkHtml)
-    + slideFooter()
-  });
 
-  // ── SLIDE 13: CLOSING ──
-  var cl = report.closing || {};
-  slides.push({ label: 'Next Steps', content:
-    card(sh('Closing Recommendation', 'The most important insight from this diagnostic')
-    + '<div style="background:' + A + '12;border:1px solid ' + A + '33;border-radius:12px;padding:28px;margin-bottom:20px">'
-    + (cl.headline ? '<div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:14px;line-height:1.2">' + escHtml(cl.headline) + '</div>' : '')
-    + '<p style="font-size:15px;color:#ccc;line-height:1.8">' + escHtml(cl.narrative || report.exec_agency || '') + '</p>'
-    + (cl.next_step ? '<div style="margin-top:20px;background:' + A + ';color:#071a0e;border-radius:8px;padding:14px 20px;display:inline-block;font-weight:700;font-size:14px">Next Step: ' + escHtml(cl.next_step) + '</div>' : '')
-    + '</div>'
-    + '<div style="background:#071a0e;border-radius:12px;padding:28px;display:flex;align-items:center;gap:20px">'
-    + agLogoHtml
-    + '<div><div style="font-size:22px;font-weight:800">' + escHtml(agencyName) + '</div>'
-    + (state.agency.tagline ? '<div style="font-size:13px;color:var(--muted)">' + escHtml(state.agency.tagline) + '</div>' : '')
-    + (state.agency.email ? '<div style="font-size:13px;color:' + A + ';margin-top:4px">' + escHtml(state.agency.email) + '</div>' : '')
-    + '</div></div>')
-    + slideFooter()
-  });
-
-  return slides;
+    var data = await response.json();
+    var text = data.content && data.content[0] ? data.content[0].text : '';
+    text = text.replace(/\`\`\`json\\n?/g,'').replace(/\`\`\`\\n?/g,'').trim();
+    var report = JSON.parse(text);
+    state.report = report;
+    buildReportSlides();
+    showScreen('reportScreen');
+  } catch(e) {
+    console.error(e);
+    // Fallback to demo report
+    state.report = buildDemoReport();
+    buildReportSlides();
+    showScreen('reportScreen');
+    showToast('Using demo data — check API key in console', 'error');
+  }
 }
 
-function toggleChk(i) {
-  var total = document.querySelectorAll('[id^="chk_"]').length;
-  var el = document.getElementById('chk_' + i);
-  var txt = document.getElementById('chktxt_' + i);
-  if (el) el.classList.toggle('checked');
-  if (txt) txt.classList.toggle('done');
-  var done = document.querySelectorAll('.chk.checked').length;
-  var bar = document.getElementById('chkBar');
-  var count = document.getElementById('chkCount');
-  if (bar) bar.style.width = Math.round(done / total * 100) + '%';
-  if (count) count.textContent = done + ' / ' + total + ' complete';
+function buildPrompt() {
+  var a = state.answers;
+  var d = state.ahrefsData || {};
+  var biz = a.client || {};
+  var fin = a.financials || {};
+  var brand = a.brand || {};
+  var obs = a.obstacles || {};
+  var mkt = a.marketing || {};
+  var comp = a.competitors || {};
+  var ret = a.retention || {};
+  var sig = state.signals.filter(function(s){return s.type==='gap'||s.type==='warn';}).map(function(s){return s.title;}).join('; ');
+
+  return 'Generate a brand diagnostic report.\\n\\n' +
+    'BUSINESS: '+biz.biz_name+' | '+biz.biz_type+' | '+biz.biz_industry+'\\n' +
+    'WEBSITE: '+biz.biz_url+'\\n' +
+    'REVENUE: '+fin.fin_revenue+' → TARGET: '+fin.fin_target+'\\n' +
+    'AD SPEND: '+fin.fin_adspend+'\\n' +
+    'GOALS: '+fin.fin_goals+'\\n' +
+    'BRAND: '+brand.brand_desc+'\\n' +
+    'USP: '+brand.brand_usp+'\\n' +
+    'OBSTACLES: '+obs.obs_main+'\\n' +
+    'TRIED: '+obs.obs_tried+'\\n' +
+    'MARKETING: '+JSON.stringify(mkt.mkt_channels)+' | BEST: '+mkt.mkt_best+'\\n' +
+    'COMPETITORS: '+comp.comp_main+'\\n' +
+    'RETENTION: '+ret.ret_strategy+' | LTV: '+ret.ret_ltv+'\\n\\n' +
+    'AHREFS DATA:\\n' +
+    'Domain: '+d.domain+' | DR: '+d.dr+' | Organic Traffic: '+d.org_traffic+'\\n' +
+    'Paid Traffic: '+d.paid_traffic+' | Keywords: '+d.org_keywords+'\\n' +
+    'Backlinks: '+d.backlinks+' | Ref Domains: '+d.refdomains+'\\n' +
+    'Detected gaps: '+sig+'\\n\\n' +
+    'DIAGNOSTIC MODE: '+(state.mode==='deep'?'Deep Workshop':'Quick Diagnostic')+'\\n\\n' +
+    'Return ONLY this JSON (no markdown):\\n' +
+    '{"exec_summary":"2-3 sentence executive summary","digital_narrative":"2-3 sentences on their digital position using Ahrefs data","revenue_now":"estimated or stated current revenue","revenue_target":"their stated target","revenue_forecast_conservative":"realistic 12-month forecast if they address gaps","revenue_forecast_optimistic":"optimistic 12-month forecast","forecast_reasoning":"2 sentences on what drives the forecast","personas":[{"name":"persona name","who":"demographics","dream_outcome":"what they want","pains":["pain1","pain2","pain3"],"objections":["obj1","obj2"]}],"gaps":[{"title":"gap title","type":"critical|opportunity|warning","desc":"2 sentences on the gap and revenue impact"}],"roadmap":[{"month":"Month 1","label":"phase label","items":["action1","action2"]},{"month":"Month 2","label":"label","items":["action1","action2"]},{"month":"Month 3","label":"label","items":["action1","action2"]},{"month":"Month 4","label":"label","items":["action1","action2"]},{"month":"Month 5","label":"label","items":["action1"]},{"month":"Month 6","label":"label","items":["action1"]}],"checklist":[{"phase":"Foundation","items":["task1","task2","task3"]},{"phase":"Acquisition","items":["task1","task2"]},{"phase":"Conversion","items":["task1","task2"]},{"phase":"Retention","items":["task1","task2"]}],"closing":"2-3 sentence closing recommendation"}';
 }
 
-function backToQuestionnaire() {
-  document.getElementById('exportBar').style.display = 'none';
-  document.getElementById('slideNavWrap').style.display = 'none';
-  document.getElementById('reportWrap').classList.remove('active');
-  document.getElementById('reportWrap').innerHTML = '';
-  document.getElementById('progressDisplay').innerHTML = '';
+function buildDemoReport() {
+  return {
+    exec_summary: "This brand is operating in a competitive market with strong product-market fit but critical gaps in digital acquisition and paid advertising. Organic traffic exists but is fragile and SEO-dependent, with no paid backup to sustain revenue if rankings shift. The 12-month opportunity is significant if the right systems are built in the right order.",
+    digital_narrative: "Domain authority is below the competitive threshold at DR 24, meaning the site struggles to rank for high-intent keywords against established competitors. Organic traffic of 2,400 visits/month is entirely SEO-dependent with zero paid traffic detected — a single algorithm change could decimate current revenue.",
+    revenue_now: "$420,000",
+    revenue_target: "$1,000,000",
+    revenue_forecast_conservative: "$680,000",
+    revenue_forecast_optimistic: "$950,000",
+    forecast_reasoning: "Conservative forecast assumes fixing top 3 gaps (paid ads, email nurture, CRO) with consistent execution over 12 months. Optimistic scenario includes a successful new channel launch and improved retention driving LTV growth.",
+    personas: [{
+      name: "The Growth-Hungry SME Owner",
+      who: "35–52, business owner, $500k–$2M revenue, time-poor, results-driven",
+      dream_outcome: "Predictable lead flow and a business that doesn't rely on referrals",
+      pains: ["No consistent inbound leads", "Wasted money on ads that didn't work", "Can't find a trustworthy agency partner"],
+      objections: ["Price too high", "Tried ads before and they didn't work", "Not the right time"]
+    }],
+    gaps: [
+      { title: "Zero paid acquisition — no scalable channel", type: "critical", desc: "Ahrefs confirms zero paid traffic. Without a paid channel, growth is capped by SEO ranking positions. This is the highest-leverage gap to close first." },
+      { title: "SEO-dependent revenue model", type: "critical", desc: "100% of digital traffic comes from organic search. One Google update could drop revenue by 40–60% overnight. Diversification is urgent." },
+      { title: "No email nurture sequence", type: "opportunity", desc: "Website visitors are not being captured and nurtured. A basic 5-email sequence could convert an additional 15–20% of existing traffic." },
+      { title: "Weak backlink profile holding down rankings", type: "warning", desc: "With fewer than 80 referring domains, they can't rank for high-volume terms. A 6-month link building programme would unlock significant organic growth." }
+    ],
+    roadmap: [
+      { month: "Month 1", label: "Foundation", items: ["Audit and fix technical SEO issues", "Set up Meta Ads account and pixel"] },
+      { month: "Month 2", label: "Launch Paid", items: ["Launch first Meta campaign (retargeting)", "Build email capture and welcome sequence"] },
+      { month: "Month 3", label: "Scale", items: ["Scale winning ad sets", "Launch Google Search campaigns"] },
+      { month: "Month 4", label: "Optimise", items: ["CRO audit and implement top 5 changes", "Launch link building outreach"] },
+      { month: "Month 5", label: "Expand", items: ["Launch new acquisition channel (TikTok or YouTube)"] },
+      { month: "Month 6", label: "Retain", items: ["Build post-purchase retention sequence", "Launch referral programme"] }
+    ],
+    checklist: [
+      { phase: "Foundation", items: ["Set up Google Analytics 4 and event tracking", "Install Meta Pixel and conversions API", "Audit and fix Core Web Vitals", "Create or audit Google My Business listing"] },
+      { phase: "Acquisition", items: ["Launch Meta retargeting campaign", "Launch Google Brand Search campaign", "Set up email capture with lead magnet", "Build 5-email welcome sequence"] },
+      { phase: "Conversion", items: ["Rewrite hero section and primary CTA", "Add social proof above the fold", "Implement exit-intent capture"] },
+      { phase: "Retention", items: ["Set up post-purchase email sequence", "Create referral programme", "Monthly client newsletter"] }
+    ],
+    closing: "The single most important next step is activating paid acquisition within the next 30 days — every month without a paid channel is a month where potential revenue is left on the table. This diagnostic gives you the evidence and the roadmap. The agency that helps this business build a diversified, predictable acquisition system will retain this client for years."
+  };
+}
+
+// ─── BUILD SLIDES ────────────────────────────────────────────────────────────
+var slideCount = 0;
+var currentSlide = 0;
+var slideLabels = [];
+
+function buildReportSlides() {
+  var r = state.report;
+  var a = state.agency;
+  var d = state.ahrefsData || {};
+  var biz = state.answers.client || {};
+  var fin = state.answers.financials || {};
+  var color = a.color || '#3cc168';
+  var logoHtml = a.logoUrl
+    ? '<img src="'+a.logoUrl+'">'
+    : '<span style="font-weight:700;font-size:14px;color:#fff">'+a.logoInitials+'</span>';
+  var agencyName = a.name || 'Your Agency';
+  var clientName = biz.biz_name || 'Client';
+  var today = new Date().toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});
+
+  var slides = [];
+  slideLabels = [];
+
+  // Helper: light slide wrapper
+  function lightSlide(content, titleLabel) {
+    slideLabels.push(titleLabel);
+    return '<div class="slide s-light">' +
+      '<div class="s-light-header">' +
+        '<div class="s-light-agency">' +
+          '<div class="s-light-logo" style="background:'+color+'">'+logoHtml+'</div>' +
+          '<span class="s-light-agency-name">'+agencyName+'</span>' +
+        '</div>' +
+        '<div class="s-light-client">'+clientName+' — Brand Diagnostic</div>' +
+      '</div>' +
+      '<div class="s-light-body">'+content+'</div>' +
+      '<div class="s-footer">' +
+        '<span>'+today+'</span>' +
+        '<span class="s-footer-logo" style="color:'+color+'">'+agencyName+'</span>' +
+        '<span>Confidential</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // SLIDE 1: COVER
+  slideLabels.push('Cover');
+  var darkerColor = shadeColor(color, -40);
+  var c1 = shadeColor(color, 20); var c2 = shadeColor(color, -20);
+  slides.push(
+    '<div class="slide s-cover" style="background:linear-gradient(135deg,'+darkerColor+' 0%,'+color+' 100%)">' +
+      '<div class="s-cover-circles">' +
+        '<span style="width:320px;height:320px;top:-80px;right:-60px;background:'+c1+'"></span>' +
+        '<span style="width:180px;height:180px;top:40%;right:15%;background:'+c2+'"></span>' +
+        '<span style="width:100px;height:100px;bottom:20%;right:5%;background:'+color+'"></span>' +
+      '</div>' +
+      '<div class="s-cover-agency-logo">' +
+        '<div class="s-cover-logo-box">'+logoHtml+'</div>' +
+        '<span class="s-cover-agency-name">'+agencyName+'</span>' +
+      '</div>' +
+      '<div class="s-cover-label">Brand Diagnostic Report</div>' +
+      '<div class="s-cover-title">'+clientName+'</div>' +
+      '<div class="s-cover-client">'+(biz.biz_industry||'')+'</div>' +
+      '<div class="s-cover-accent-line" style="background:rgba(255,255,255,.5)"></div>' +
+      '<div class="s-cover-meta">' +
+        '<div class="s-cover-meta-item"><label>Date</label><span>'+today+'</span></div>' +
+        '<div class="s-cover-meta-item"><label>Type</label><span>'+(state.mode==='deep'?'Deep Workshop':'Quick Diagnostic')+'</span></div>' +
+        '<div class="s-cover-meta-item"><label>Domain</label><span>'+(d.domain||biz.biz_url||'—')+'</span></div>' +
+      '</div>' +
+    '</div>'
+  );
+
+  // SLIDE 2: EXECUTIVE SUMMARY
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Executive Summary</div>' +
+    '<div class="s-title">Where They Are & Where They\\'re Going</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    '<div class="s-body-text" style="margin-bottom:20px">'+r.exec_summary+'</div>' +
+    '<div class="s-body-text">'+r.digital_narrative+'</div>' +
+    '<div class="metric-grid" style="margin-top:24px">' +
+      '<div class="metric-card"><div class="metric-card-label">Current Revenue</div><div class="metric-card-val" style="color:'+color+'">'+r.revenue_now+'</div><div class="metric-card-sub">Stated / estimated</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">12-Month Target</div><div class="metric-card-val">'+r.revenue_target+'</div><div class="metric-card-sub">Client goal</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Our Forecast</div><div class="metric-card-val">'+r.revenue_forecast_conservative+'–'+r.revenue_forecast_optimistic+'</div><div class="metric-card-sub">With agency support</div></div>' +
+    '</div>',
+    'Exec Summary'
+  ));
+
+  // SLIDE 3: DIGITAL POSITION (Ahrefs)
+  var kwHtml = '';
+  if (d.keywords && d.keywords.length > 0) {
+    kwHtml = '<table class="data-table" style="margin-top:16px"><thead><tr><th>Keyword</th><th>Position</th><th>Volume</th></tr></thead><tbody>';
+    d.keywords.slice(0,6).forEach(function(k) {
+      kwHtml += '<tr><td>'+k.keyword+'</td><td class="num">'+k.best_position+'</td><td>'+fmt(k.volume)+'</td></tr>';
+    });
+    kwHtml += '</tbody></table>';
+  }
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Digital Position</div>' +
+    '<div class="s-title">Live Domain Intelligence</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    '<div class="metric-grid">' +
+      '<div class="metric-card"><div class="metric-card-label">Domain Rating</div><div class="metric-card-val" style="color:'+(d.dr!=null&&d.dr<20?'#dc2626':color)+'">'+fmt(d.dr)+'</div><div class="metric-card-sub">Authority score</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Organic Traffic</div><div class="metric-card-val">'+fmt(d.org_traffic)+'</div><div class="metric-card-sub">Monthly visits</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Paid Traffic</div><div class="metric-card-val" style="color:'+(d.paid_traffic===0?'#dc2626':'inherit')+'">'+((d.paid_traffic===0||d.paid_traffic==null)?'None':fmt(d.paid_traffic))+'</div><div class="metric-card-sub">From ads</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Keywords</div><div class="metric-card-val">'+fmt(d.org_keywords)+'</div><div class="metric-card-sub">Ranking keywords</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Backlinks</div><div class="metric-card-val">'+fmt(d.backlinks)+'</div><div class="metric-card-sub">Total backlinks</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Ref Domains</div><div class="metric-card-val">'+fmt(d.refdomains)+'</div><div class="metric-card-sub">Unique domains</div></div>' +
+    '</div>' +
+    kwHtml,
+    'Digital Position'
+  ));
+
+  // SLIDE 4: COMPETITOR TABLE
+  var compHtml = '';
+  if (d.competitors && d.competitors.length > 0) {
+    compHtml = '<table class="data-table"><thead><tr><th>Competitor</th><th>DR</th><th>Traffic</th><th>Keywords</th><th>Gap</th></tr></thead><tbody>';
+    d.competitors.slice(0,5).forEach(function(c) {
+      var trafficGap = d.org_traffic != null && c.traffic != null ? c.traffic > d.org_traffic : false;
+      compHtml += '<tr><td><strong>'+c.competitor_domain+'</strong></td><td>'+fmt(c.domain_rating)+'</td><td>'+fmt(c.traffic)+'</td><td>'+fmt(c.keywords_common)+'</td><td>'+(trafficGap?'<span class="badge-gap">Behind</span>':'<span class="badge-ok">Ahead</span>')+'</td></tr>';
+    });
+    compHtml += '</tbody></table>';
+  } else {
+    compHtml = '<div style="color:#888;font-size:14px;margin-top:16px">Competitor data not available — enter a live domain to pull competitor analysis.</div>';
+  }
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Competitive Landscape</div>' +
+    '<div class="s-title">How They Stack Up</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    '<div class="s-body-text" style="margin-bottom:4px">Organic competitors ranked by traffic — sourced live from Ahrefs.</div>' +
+    compHtml,
+    'Competitors'
+  ));
+
+  // SLIDE 5: CUSTOMER AVATAR
+  if (r.personas && r.personas.length > 0) {
+    var p = r.personas[0];
+    var personaHtml = '<div class="persona-card">' +
+      '<div class="persona-name">'+p.name+'</div>' +
+      '<div class="persona-who">'+p.who+'</div>' +
+      '<div class="persona-grid">' +
+        '<div><div class="persona-section-label">Dream Outcome</div><div style="font-size:13px;color:#444;font-style:italic">"'+p.dream_outcome+'"</div></div>' +
+        '<div><div class="persona-section-label">Core Objections</div>'+(p.objections||[]).map(function(o){return '<span class="persona-tag">'+o+'</span>';}).join('')+'</div>' +
+        '<div><div class="persona-section-label">Pain Points</div>'+(p.pains||[]).map(function(o){return '<span class="persona-tag">'+o+'</span>';}).join('')+'</div>' +
+      '</div></div>';
+    slides.push(lightSlide(
+      '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Customer Avatar</div>' +
+      '<div class="s-title">Who\\'s Buying — And Why</div>' +
+      '<div class="s-accent-line" style="background:'+color+'"></div>' +
+      personaHtml,
+      'Avatar'
+    ));
+  }
+
+  // SLIDE 6: GAP ANALYSIS
+  var gapHtml = '<div class="gap-grid">';
+  (r.gaps||[]).forEach(function(g) {
+    gapHtml += '<div class="gap-card '+g.type+'"><div class="gap-card-title">'+g.title+'</div><div class="gap-card-desc">'+g.desc+'</div></div>';
+  });
+  gapHtml += '</div>';
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Gap Analysis</div>' +
+    '<div class="s-title">Where the Revenue Is Being Lost</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    gapHtml,
+    'Gaps'
+  ));
+
+  // SLIDE 7: FORECAST
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Revenue Forecast</div>' +
+    '<div class="s-title">The Financial Opportunity</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    '<div class="metric-grid">' +
+      '<div class="metric-card"><div class="metric-card-label">Current Revenue</div><div class="metric-card-val">'+r.revenue_now+'</div><div class="metric-card-sub">Today</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Conservative Forecast</div><div class="metric-card-val" style="color:'+color+'">'+r.revenue_forecast_conservative+'</div><div class="metric-card-sub">12 months with agency</div></div>' +
+      '<div class="metric-card"><div class="metric-card-label">Optimistic Forecast</div><div class="metric-card-val" style="color:'+color+'">'+r.revenue_forecast_optimistic+'</div><div class="metric-card-sub">Best case 12 months</div></div>' +
+    '</div>' +
+    '<div style="background:#f8f9fa;border-radius:10px;padding:16px 20px;margin-top:20px;border-left:4px solid '+color+'">' +
+      '<div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-bottom:6px">Forecast Rationale</div>' +
+      '<div style="font-size:14px;color:#444;line-height:1.6">'+r.forecast_reasoning+'</div>' +
+    '</div>',
+    'Forecast'
+  ));
+
+  // SLIDE 8: 6-MONTH ROADMAP
+  var rmHtml = '<div class="roadmap-grid">';
+  (r.roadmap||[]).forEach(function(rm,i) {
+    var c = i < 2 ? color : i < 4 ? shadeColor(color, 20) : shadeColor(color, -20);
+    rmHtml += '<div class="roadmap-card" style="border-color:'+c+'">' +
+      '<div class="roadmap-card-month" style="color:'+c+'">'+rm.month+'</div>' +
+      '<div class="roadmap-card-label">'+rm.label+'</div>' +
+      '<ul class="roadmap-card-items">'+(rm.items||[]).map(function(it){return '<li>'+it+'</li>';}).join('')+'</ul>' +
+    '</div>';
+  });
+  rmHtml += '</div>';
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">6-Month Roadmap</div>' +
+    '<div class="s-title">The Plan to Get There</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    rmHtml,
+    'Roadmap'
+  ));
+
+  // SLIDE 9: ONBOARDING CHECKLIST
+  var ckHtml = '<ul class="checklist" id="reportChecklist">';
+  (r.checklist||[]).forEach(function(phase) {
+    ckHtml += '<li class="checklist-phase">'+phase.phase+'</li>';
+    (phase.items||[]).forEach(function(item,i) {
+      ckHtml += '<li class="checklist-item" onclick="toggleCheck(this)"><div class="checklist-box">✓</div><span class="checklist-text">'+item+'</span></li>';
+    });
+  });
+  ckHtml += '</ul>';
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Onboarding Checklist</div>' +
+    '<div class="s-title">Getting Started — Tick It Off</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    ckHtml,
+    'Checklist'
+  ));
+
+  // SLIDE 10: CLOSING
+  slides.push(lightSlide(
+    '<div class="s-section-tag" style="background:'+hexToRgba(color,.12)+';color:'+color+'">Closing Recommendation</div>' +
+    '<div class="s-title">The Next Step</div>' +
+    '<div class="s-accent-line" style="background:'+color+'"></div>' +
+    '<div style="background:'+color+';border-radius:12px;padding:28px;margin-bottom:20px">' +
+      '<div style="font-family:\\'DM Serif Display\\',serif;font-size:22px;color:#fff;line-height:1.4">'+r.closing+'</div>' +
+    '</div>' +
+    '<div style="display:flex;gap:16px">' +
+      '<div style="flex:1;background:#f8f9fa;border-radius:10px;padding:16px;text-align:center">' +
+        '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:4px">Prepared by</div>' +
+        '<div style="font-size:15px;font-weight:700;color:#111">'+agencyName+'</div>' +
+        '<div style="font-size:13px;color:#888">'+(a.email||'')+'</div>' +
+      '</div>' +
+      '<div style="flex:1;background:#f8f9fa;border-radius:10px;padding:16px;text-align:center">' +
+        '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:4px">Report date</div>' +
+        '<div style="font-size:15px;font-weight:700;color:#111">'+today+'</div>' +
+        '<div style="font-size:13px;color:#888">'+(state.mode==='deep'?'Deep Diagnostic':'Quick Diagnostic')+'</div>' +
+      '</div>' +
+    '</div>',
+    'Closing'
+  ));
+
+  slideCount = slides.length;
   currentSlide = 0;
-  document.getElementById('tabsWrap').style.display = 'block';
-  document.getElementById('questionnaireWrap').style.display = 'block';
-  renderTabs(); renderSection();
+
+  // Inject slides
+  var html = '';
+  slides.forEach(function(s, i) {
+    html += '<div class="slide'+(i===0?' active':'')+'">'+s+'</div>';
+  });
+  document.getElementById('slidesContainer').innerHTML = html;
+
+  // Thumbnails
+  var thumbHtml = '';
+  slideLabels.forEach(function(l,i) {
+    thumbHtml += '<div class="slide-thumb'+(i===0?' active':'')+'\\" onclick="goToSlide('+i+')" title="'+l+'">'+l+'</div>';
+  });
+  document.getElementById('slideThumbs').innerHTML = thumbHtml;
+  document.getElementById('slideCounter').textContent = '1 / '+slideCount;
+
+  // Update report topbar
+  var rLogo = document.getElementById('reportTopbarLogo');
+  if (a.logoUrl) { rLogo.innerHTML = '<img src="'+a.logoUrl+'" style="width:100%;height:100%;object-fit:cover">'; }
+  else { rLogo.innerHTML = '<span style="font-size:11px;font-weight:700;color:#fff">'+a.logoInitials+'</span>'; rLogo.style.background = a.color; }
+  document.getElementById('reportTopbarName').textContent = a.name || 'Brand Diagnostic';
 }
 
-function exportHTML() {
-  var container = document.getElementById('reportWrap');
-  if (!container || !container.innerHTML) { alert('Generate a report first'); return; }
-  var clientName = (state.answers.client && state.answers.client.biz_name) || 'client';
-  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Brand Diagnostic — ' + escHtml(clientName) + '</title>'
-    + '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">'
-    + '<style>body{font-family:Inter,sans-serif;background:#071a0e;color:#fff;margin:0;padding:20px}' + document.querySelector('style').textContent + '</style></head>'
-    + '<body>' + container.outerHTML + '</body></html>';
-  var blob = new Blob([html], { type: 'text/html' });
-  var url = URL.createObjectURL(blob);
-  var a = document.createElement('a');
-  a.href = url;
-  a.download = clientName.replace(/\\s+/g, '-') + '_brand_diagnostic.html';
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+function toggleCheck(el) {
+  el.classList.toggle('checked');
 }
 
-function escHtml(s) {
-  if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+function goToSlide(idx) {
+  var allSlides = document.querySelectorAll('#slidesContainer .slide');
+  var allThumbs = document.querySelectorAll('.slide-thumb');
+  if (allSlides[currentSlide]) allSlides[currentSlide].classList.remove('active');
+  if (allThumbs[currentSlide]) allThumbs[currentSlide].classList.remove('active');
+  currentSlide = Math.max(0, Math.min(idx, slideCount-1));
+  if (allSlides[currentSlide]) allSlides[currentSlide].classList.add('active');
+  if (allThumbs[currentSlide]) { allThumbs[currentSlide].classList.add('active'); allThumbs[currentSlide].scrollIntoView({inline:'center',block:'nearest'}); }
+  document.getElementById('slideCounter').textContent = (currentSlide+1)+' / '+slideCount;
+  window.scrollTo(0,0);
+}
+function prevSlide() { goToSlide(currentSlide-1); }
+function nextSlide() { goToSlide(currentSlide+1); }
+
+function printReport() {
+  window.print();
 }
 
-updateTopBarLogo();
+function startOver() {
+  if (!confirm('Start a new diagnostic? This will clear all current data.')) return;
+  state.answers = {}; state.ahrefsData = null; state.report = null; state.signals = [];
+  state.mode = null; state.currentSection = 0; currentSlide = 0; domainPulled = false;
+  document.getElementById('modeQuick').classList.remove('selected');
+  document.getElementById('modeDeep').classList.remove('selected');
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('progressWrap').style.display = 'none';
+  showScreen('modeScreen');
+}
+
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(function(s){ s.classList.remove('active'); });
+  document.getElementById(id).classList.add('active');
+}
+
+function showToast(msg, type) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show '+(type||'');
+  setTimeout(function(){ t.classList.remove('show'); }, 3000);
+}
+
+function shadeColor(hex, pct) {
+  var num = parseInt(hex.replace('#',''), 16);
+  var r = Math.min(255, Math.max(0, (num >> 16) + pct));
+  var g = Math.min(255, Math.max(0, ((num >> 8) & 0xff) + pct));
+  var b = Math.min(255, Math.max(0, (num & 0xff) + pct));
+  return '#' + ((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
+}
+
+function hexToRgba(hex, alpha) {
+  var num = parseInt(hex.replace('#',''), 16);
+  return 'rgba('+((num>>16)&255)+','+((num>>8)&255)+','+(num&255)+','+alpha+')';
+}
+
+// Keyboard nav
+document.addEventListener('keydown', function(e) {
+  var rep = document.getElementById('reportScreen');
+  if (!rep.classList.contains('active')) return;
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown') nextSlide();
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') prevSlide();
+});
+
+// Print styles
+var printStyle = document.createElement('style');
+printStyle.textContent = '@media print{.report-topbar,.slide-thumbs,.report-nav{display:none!important}.slide{display:block!important;page-break-after:always;margin-bottom:0!important}.slides-wrap{padding:0!important}body{background:#fff!important}}';
+document.head.appendChild(printStyle);
 </script>
 </body>
-</html>`;
+</html>
+`;
 
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
