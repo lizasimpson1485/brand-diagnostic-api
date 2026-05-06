@@ -778,7 +778,7 @@ function processAdsFile(file, platform) {
 }
 
 function parseCSV(text) {
-  var lines = text.split(/\r?\n/).filter(function(l){return l.trim();});
+  var lines = text.split(String.fromCharCode(10)).map(function(l){return l.replace(String.fromCharCode(13),'');}).filter(function(l){return l.trim();});
   if (!lines.length) return [];
   var headers = lines[0].split(',').map(function(h){return h.replace(/^"|"$/g,'').trim();});
   var rows = [];
@@ -796,7 +796,7 @@ function proceedWithGenerate() { startGenerating(); }
 
 function startGenerating() {
   var biz_url=(state.answers.client||{}).biz_url||'';
-  var domain=biz_url.replace(/https?:\/\//,'').replace(/\/.*$/,'').replace(/^www\./,'').trim();
+  var domain=biz_url.replace('https://','').replace('http://','').split('/')[0].replace('www.','').trim();
   var clientName=(state.answers.client||{}).biz_name||'Client';
   document.getElementById('loadingDomain').textContent = 'Pulling live data for '+(domain||clientName)+'...';
   showScreen('loadingScreen');
@@ -824,7 +824,7 @@ function startGenerating() {
       reader.read().then(function(r){
         if(r.done)return;
         buf+=dec.decode(r.value,{stream:true});
-        var parts=buf.split('\n\n');buf=parts.pop();
+        var parts=buf.split(String.fromCharCode(10)+String.fromCharCode(10));buf=parts.pop();
         parts.forEach(function(part){
           if(!part.startsWith('data: '))return;
           try{
@@ -1231,12 +1231,12 @@ function downloadHTML(){
   slides.forEach(function(s){html+='<div style="margin-bottom:40px;page-break-after:always">'+s.html+'</div>';});
   html+='</body></html>';
   var blob=new Blob([html],{type:'text/html'});var url=URL.createObjectURL(blob);
-  var a=document.createElement('a');a.href=url;a.download=(d.clientName||'client').replace(/\\s+/g,'-')+'_brand_diagnostic.html';
+  var a=document.createElement('a');a.href=url;a.download=(d.clientName||'client').replace(/[ ]+/g,'-')+'_brand_diagnostic.html';
   document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
 }
 function showScreen(id){document.querySelectorAll('.screen').forEach(function(s){s.classList.remove('active');});document.getElementById(id).classList.add('active');}
 function showToast(msg,type){var t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+(type||'');setTimeout(function(){t.classList.remove('show');},3000);}
-function stripTags(s){if(!s)return '';return String(s).replace(/<cite[^>]*>.*?<\/cite>/gi,'').replace(/<[^>]+>/g,'').replace(/\s{2,}/g,' ').trim();}
+function stripTags(s){if(!s)return '';var r=String(s);r=r.replace(/<[^>]+>/g,'');while(r.indexOf('  ')>=0)r=r.replace('  ',' ');return r.trim();}
 function esc(s){if(!s)return '';return stripTags(String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function shadeColor(hex,pct){var num=parseInt(hex.replace('#',''),16);var r=Math.min(255,Math.max(0,(num>>16)+pct));var g=Math.min(255,Math.max(0,((num>>8)&0xff)+pct));var b=Math.min(255,Math.max(0,(num&0xff)+pct));return '#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);}
 function hexRgba(hex,alpha){var num=parseInt(hex.replace('#',''),16);return 'rgba('+((num>>16)&255)+','+((num>>8)&255)+','+(num&255)+','+alpha+')';}
