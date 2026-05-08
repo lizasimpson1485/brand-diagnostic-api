@@ -828,10 +828,15 @@ function startGenerating() {
       else{el.className='loading-step';if(dot)dot.style.background='';}
     });
   }
-  console.log('Generating for:', domain, clientName, 'mode:', state.mode, 'type:', state.clientType);
+  console.log('Generating for:', domain, clientName, 'mode:', state.mode, 'type:', state.clientType, 'answers:', Object.keys(state.answers));
+  // Limit ads reports to avoid payload size issues
+  var safeAdsReports = {};
+  if (adsReports && adsReports.meta) safeAdsReports.meta = (adsReports.meta||[]).slice(0,200);
+  if (adsReports && adsReports.google) safeAdsReports.google = (adsReports.google||[]).slice(0,200);
   var payload={domain:domain,clientName:clientName,mode:state.mode,bizType:state.clientType,
-    agency:{name:state.agency.name,email:state.agency.email,color:state.agency.color,logoUrl:state.agency.logoUrl,logoSessionId:sessionId},
-    answers:state.answers, adsReports:adsReports};
+    agency:{name:state.agency.name,email:state.agency.email,color:state.agency.color,logoUrl:'',logoSessionId:sessionId},
+    answers:state.answers, adsReports:safeAdsReports};
+  console.log('Payload size:', JSON.stringify(payload).length, 'bytes');
 
   fetch('/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
   .then(function(resp){
@@ -894,6 +899,7 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
   function pill(text,type){var colors={ok:'#16a34a',warn:'#d97706',bad:'#dc2626'};var bgs={ok:'#f0fdf4',warn:'#fffbeb',bad:'#fef2f2'};return '<span style="background:'+(bgs[type]||bgs.warn)+';color:'+(colors[type]||colors.warn)+';font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px">'+esc(text)+'</span>';}
 
   var d=ahrefs||{};
+  var isDeep = state.mode === 'deep';
   var dr=d.domain_rating||0;var orgT=d.org_traffic||0;var paidT=d.paid_traffic||0;
   var slides=[];
 
@@ -970,11 +976,40 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
     compHtml+='</tbody></table>';
   } else { compHtml='<p style="color:#999;font-size:13px;margin-top:16px">No competitor data returned for this domain.</p>'; }
   var ca=report.competitor_analysis||{};
+
+  // Build keyword ranking table for deep mode
+  var kwCompHtml = '';
+  if(isDeep && d.keywords && d.keywords.length) {
+    kwCompHtml += '<div style="margin-top:18px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:8px">Your Keyword Rankings</div>';
+    kwCompHtml += '<table class="r-data-table"><thead><tr><th>Keyword</th><th>Your Position</th><th>Volume</th><th>Traffic Est.</th><th>Status</th></tr></thead><tbody>';
+    d.keywords.slice(0,12).forEach(function(k){
+      var pos = k.best_position || '—';
+      var status = pos <= 3 ? 'Top 3' : pos <= 10 ? 'Page 1' : pos <= 20 ? 'Page 2' : 'Low';
+      var statusColor = pos <= 3 ? color : pos <= 10 ? '#16a34a' : pos <= 20 ? '#d97706' : '#dc2626';
+      kwCompHtml += '<tr><td><strong>'+esc(k.keyword||'')+'</strong></td>'
+        +'<td style="font-weight:700;color:'+statusColor+'">'+(pos==='—'?'—':'#'+pos)+'</td>'
+        +'<td>'+fmt(k.volume)+'</td>'
+        +'<td>'+fmt(k.sum_traffic)+'</td>'
+        +'<td><span style="background:'+statusColor+'22;color:'+statusColor+';font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px">'+esc(status)+'</span></td></tr>';
+    });
+    kwCompHtml += '</tbody></table></div>';
+  }
+
+  // Keyword gaps from AI analysis
+  var kwGapHtml = '';
+  if(ca.keyword_gaps && ca.keyword_gaps.length) {
+    kwGapHtml = '<div style="margin-top:14px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#dc2626;margin-bottom:8px">Keywords Competitors Rank For — You Don&#39;t</div>'
+    + ca.keyword_gaps.map(function(g){return '<div style="background:#fef2f2;border-left:3px solid #dc2626;border-radius:6px;padding:8px 12px;margin-bottom:6px;font-size:13px;color:#333">'+esc(g)+'</div>';}).join('')
+    + '</div>';
+  }
+
   slides.push(lightSlide('Competitors',
     tag('Competitive Landscape')+title('How They Stack Up')
     +(ca.summary?'<p style="font-size:14px;color:#444;line-height:1.6;margin-bottom:12px">'+esc(ca.summary)+'</p>':'')
     +compHtml
-    +(ca.market_gaps&&ca.market_gaps.length?'<div style="margin-top:14px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#888;margin-bottom:8px">Market Gaps Identified</div>'
+    +kwCompHtml
+    +kwGapHtml
+    +(ca.market_gaps&&ca.market_gaps.length?'<div style="margin-top:14px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#16a34a;margin-bottom:8px">Market Gaps to Exploit</div>'
     +ca.market_gaps.map(function(g){return '<div style="background:#f0fdf4;border-left:3px solid #16a34a;border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:13px;color:#333">'+esc(g)+'</div>';}).join('')+'</div>':'')
   ));
 
