@@ -1039,7 +1039,7 @@ function renderReport(report, ahrefs, clientName, domain, ag, research) {
   ));
 
   // SLIDE 5b: PAID ADS ACCOUNT AUDIT (only if ads data was uploaded)
-  if (report.ads_analysis && report.ads_analysis.overall_grade) {
+  if (report.ads_analysis && (report.ads_analysis.overall_grade || report.ads_analysis.overall_summary)) {
     var aa = report.ads_analysis;
     var gradeColor = {A:color,B:'#16a34a',C:'#d97706',D:'#ea580c',F:'#dc2626'}[aa.overall_grade]||'#d97706';
     var adsSlideHtml = tag('Paid Ads Account Audit') + title('Ads Performance Deep-Dive')
@@ -1314,6 +1314,16 @@ app.post('/generate', async (req, res) => {
   // Fallbacks if fields are empty
   domain = (domain || '').trim() || (clientName||'client').toLowerCase().replace(/[^a-z0-9]/g,'-') + '.com';
   clientName = (clientName || '').trim() || domain || 'Client';
+
+  // Merge ads reports: check server-side store (more reliable than payload for large files)
+  const sessionId = agency && agency.logoSessionId;
+  if (sessionId && adsReportStore[sessionId]) {
+    const stored = adsReportStore[sessionId];
+    if (!adsReports) adsReports = {};
+    if (stored.meta && !adsReports.meta) adsReports.meta = stored.meta;
+    if (stored.google && !adsReports.google) adsReports.google = stored.google;
+  }
+
   // Be lenient - use fallbacks if fields are empty
 
   try {
@@ -1378,7 +1388,8 @@ app.post('/generate', async (req, res) => {
     send('progress', { msg: 'Researching reviews & brand signals', pct: 68 });
     const research = await webResearch(clientName, domain);
 
-    send('progress', { msg: 'Running AI analysis (5 parallel passes)...', pct: 82 });
+    const hasAdsUpload = adsReports && (adsReports.meta || adsReports.google);
+    send('progress', { msg: hasAdsUpload ? 'Running AI analysis (6 parallel passes including ads audit)...' : 'Running AI analysis (5 parallel passes)...', pct: 82 });
     const report = await runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers, adsReports || {});
     report.web_research = research;
 
