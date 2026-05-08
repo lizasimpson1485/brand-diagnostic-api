@@ -1479,6 +1479,11 @@ async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, 
   // Run passes in parallel where possible
   const hasAdsData = adsReports && (adsReports.meta || adsReports.google);
 
+  async function safePass(fn, name) {
+    try { return await fn(); }
+    catch(e) { console.warn('Pass failed:', name, e.message); return {}; }
+  }
+
   const [
     execAndScores,
     gapAndForecast,
@@ -1487,12 +1492,12 @@ async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, 
     roadmapAndChecklist,
     adsAnalysis
   ] = await Promise.all([
-    pass_execAndScores(ctx, clientName, domain, ahrefs, research, isDeep),
-    pass_gapAndForecast(ctx, clientName, ahrefs, research, isDeep),
-    pass_personaAndOffer(ctx, clientName, research, q, isDeep),
-    pass_competitorIntel(ctx, clientName, domain, ahrefs, research, isDeep),
-    pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep),
-    hasAdsData ? pass_adsAnalysis(ctx, clientName, adsReports, ahrefs) : Promise.resolve({ads_analysis: null})
+    safePass(() => pass_execAndScores(ctx, clientName, domain, ahrefs, research, isDeep), 'exec'),
+    safePass(() => pass_gapAndForecast(ctx, clientName, ahrefs, research, isDeep), 'gaps'),
+    safePass(() => pass_personaAndOffer(ctx, clientName, research, q, isDeep), 'persona'),
+    safePass(() => pass_competitorIntel(ctx, clientName, domain, ahrefs, research, isDeep), 'competitor'),
+    safePass(() => pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep), 'roadmap'),
+    hasAdsData ? safePass(() => pass_adsAnalysis(ctx, clientName, adsReports, ahrefs), 'ads') : Promise.resolve({ads_analysis: null})
   ]);
 
   // Merge all passes into one report object
@@ -1872,20 +1877,45 @@ Return ONLY valid JSON:
 }
 
 // ─── Claude API helpers ───────────────────────────────────────────────────────
-async function callClaude(prompt, maxTokens, useSearch) {
+async function callClaude(prompt, maxTokens, useSearch, retryCount = 0) {
   const tools = useSearch ? [{ type: 'web_search_20250305', name: 'web_search' }] : undefined;
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 2000,
-    system: 'You are a world-class brand strategist and growth consultant. Every output is a paid deliverable. Be specific, commercially sharp, and data-driven. Use real numbers. No generic filler. Return ONLY valid JSON — no markdown, no fences, no extra text.',
+    system: 'You are a world-class brand strategist and growth consultant. Every output is a paid deliverable. Be specific, commercially sharp, and data-driven. Use real numbers. No generic filler. Return ONLY valid JSON — no markdown, no fences, no extra text. Ensure all strings are properly escaped. Never include unescaped newlines inside JSON string values.',
     tools: tools,
     messages: [{ role: 'user', content: prompt }]
   });
   const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
   const clean = text.replace(/```[\w]*/g, '').replace(/```/g, '').trim();
   const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
-  if (s >= 0 && e > s) return stripCites(JSON.parse(clean.substring(s, e + 1)));
-  throw new Error('Failed to parse JSON from Claude response');
+  if (s < 0 || e <= s) throw new Error('No JSON object found in response');
+  const jsonStr = clean.substring(s, e + 1);
+  try {
+    return stripCites(JSON.parse(jsonStr));
+  } catch (parseErr) {
+    // Attempt to fix common JSON issues
+    const fixed = jsonStr
+      .replace(/([^\\])\n/g, '$1 ')      // unescaped newlines in strings
+      .replace(/([^\\])\r/g, '$1 ')      // unescaped carriage returns
+      .replace(/([^\\])\t/g, '$1 ')      // unescaped tabs
+      .replace(/,\s*([}\]])/g, '$1')      // trailing commas
+      .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'); // unquoted keys
+    try {
+      return stripCites(JSON.parse(fixed));
+    } catch (fixErr) {
+      // Retry once with stronger instruction
+      if (retryCount < 1) {
+        console.warn('JSON parse failed, retrying with stricter prompt...');
+        return callClaude(
+          prompt + '\n\nCRITICAL: Your previous response had invalid JSON. Return ONLY a single valid JSON object. No text before or after. No newlines inside string values — use spaces instead.',
+          maxTokens, useSearch, retryCount + 1
+        );
+      }
+      console.error('JSON parse failed after retry. Raw:', jsonStr.slice(0, 500));
+      throw new Error('JSON parse error: ' + parseErr.message);
+    }
+  }
 }
 
 async function callClaudeWithSearch(prompt, maxTokens) {
