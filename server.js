@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const Anthropic = require('@anthropic-ai/sdk');
+const crypto = require('crypto');
+const https = require('https');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
@@ -10,7 +12,91 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const AHREFS_API_KEY = process.env.AHREFS_API_KEY;
 const PORT = process.env.PORT || 3000;
 
-const logoStore = {};
+// ─── GoHighLevel config ───────────────────────────────────────────────────────
+// GHL API key and custom field key for the diagnostic code
+const GHL_API_KEY   = process.env.GHL_API_KEY   || '';   // GHL private integration API key
+const GHL_CODE_FIELD    = process.env.GHL_CODE_FIELD    || 'diagnostic_code'; // custom field key
+const GHL_LOCATION_ID  = process.env.GHL_LOCATION_ID  || '';  // GHL Location/Sub-account ID
+
+// ─── In-memory stores ─────────────────────────────────────────────────────────
+const logoStore      = {};
+const adsReportStore = {};
+// sessions: token -> { contactId, contactName, contactEmail, code }
+const sessions = {};
+// code cache: code -> contactId (avoid repeated GHL lookups, expires after 1 hour)
+const codeCache = {};
+const codeCacheTime = {};
+const CODE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+// ─── GHL API helper ───────────────────────────────────────────────────────────
+async function ghlRequest(path, method = 'GET', body = null) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : null;
+    const options = {
+      hostname: 'services.leadconnectorhq.com',
+      path,
+      method,
+      headers: {
+        'Authorization': `Bearer \${GHL_API_KEY}`,
+        'Version': '2021-07-28',
+        'Content-Type': 'application/json',
+        ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {})
+      }
+    };
+    const req = https.request(options, res => {
+      let raw = '';
+      res.on('data', c => raw += c);
+      res.on('end', () => {
+        try { resolve(JSON.parse(raw)); }
+        catch(e) { reject(new Error('GHL parse error: ' + raw.slice(0, 200))); }
+      });
+    });
+    req.on('error', reject);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+// Search GHL contacts for one that has this exact code in the custom field
+async function validateCodeAgainstGHL(code) {
+  const upperCode = code.trim().toUpperCase();
+
+  // Check cache first
+  const cached = codeCache[upperCode];
+  if (cached && (Date.now() - codeCacheTime[upperCode]) < CODE_CACHE_TTL) {
+    return cached; // returns contact object or null
+  }
+
+  try {
+    // Search contacts - try searching by custom field value
+    // GHL v2: search all contacts and filter by custom field
+    const searchPath = '/contacts/?locationId=' + encodeURIComponent(process.env.GHL_LOCATION_ID || '') +
+      '&query=' + encodeURIComponent(upperCode) + '&limit=20';
+    const result = await ghlRequest(searchPath);
+    const contacts = result.contacts || [];
+    // Find contact with matching custom field value
+    const contact = contacts.find(function(c) {
+      const fields = c.customFields || c.customField || [];
+      return fields.some(function(f) {
+        const key = f.key || f.id || '';
+        const val = (f.value || f.fieldValue || '').toString().trim().toUpperCase();
+        return val === upperCode;
+      });
+    }) || null;
+    // Cache result
+    codeCache[upperCode] = contact;
+    codeCacheTime[upperCode] = Date.now();
+    return contact;
+  } catch (err) {
+    console.error('GHL lookup error:', err.message);
+    // If GHL is unreachable, fail closed (deny access)
+    return null;
+  }
+}
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
 
 app.post('/upload-logo', (req, res) => {
   const { logoData, sessionId } = req.body;
@@ -30,7 +116,6 @@ app.get('/logo/:sessionId', (req, res) => {
 });
 
 // ─── Ads report storage ──────────────────────────────────────────────────────
-const adsReportStore = {};
 
 app.post('/upload-ads-report', (req, res) => {
   const { reportData, reportType, sessionId } = req.body;
@@ -40,8 +125,72 @@ app.post('/upload-ads-report', (req, res) => {
   res.json({ ok: true, type: reportType, rows: reportData.length });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, version: '2.1.0' }));
+// ─── Auth endpoint ────────────────────────────────────────────────────────────
+app.post('/auth/validate', async (req, res) => {
+  const { code } = req.body;
+  if (!code || code.trim().length < 4) {
+    return res.status(400).json({ error: 'Please enter your access code' });
+  }
 
+  // If no GHL key configured, fall back to env MEMBER_CODES
+  if (!GHL_API_KEY) {
+    const fallbackCodes = new Set(
+      (process.env.MEMBER_CODES || '').split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
+    );
+    if (fallbackCodes.size > 0 && fallbackCodes.has(code.trim().toUpperCase())) {
+      const token = generateToken();
+      sessions[token] = { contactId: 'manual', contactName: 'Member', code: code.trim().toUpperCase() };
+      return res.json({ ok: true, token, name: 'Member' });
+    }
+    return res.status(401).json({ error: 'Invalid access code' });
+  }
+
+  // Validate against GHL
+  const contact = await validateCodeAgainstGHL(code);
+  if (!contact) {
+    return res.status(401).json({ error: 'Invalid access code. Please check your code and try again.' });
+  }
+
+  const token = generateToken();
+  sessions[token] = {
+    contactId: contact.id,
+    contactName: (contact.firstName || '') + ' ' + (contact.lastName || ''),
+    contactEmail: contact.email || '',
+    code: code.trim().toUpperCase()
+  };
+
+  res.json({
+    ok: true,
+    token,
+    name: ((contact.firstName || '') + ' ' + (contact.lastName || '')).trim() || 'Member'
+  });
+});
+
+// Check if a session token is still valid
+app.post('/auth/check', (req, res) => {
+  const { token } = req.body;
+  if (token && sessions[token]) {
+    return res.json({ ok: true, name: sessions[token].contactName });
+  }
+  res.status(401).json({ ok: false, error: 'Session expired' });
+});
+
+// Admin: invalidate a code (call from GHL webhook when membership is revoked)
+app.post('/auth/revoke', (req, res) => {
+  const { code, adminKey } = req.body;
+  if (adminKey !== process.env.ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  const upperCode = (code || '').trim().toUpperCase();
+  // Remove from cache so next lookup hits GHL fresh
+  delete codeCache[upperCode];
+  delete codeCacheTime[upperCode];
+  // Invalidate all sessions with this code
+  Object.keys(sessions).forEach(token => {
+    if (sessions[token].code === upperCode) delete sessions[token];
+  });
+  res.json({ ok: true, message: 'Code revoked and sessions cleared' });
+});
+
+app.get('/health', (req, res) => res.json({ ok: true, version: '2.2.0' }));
 
 const TOOL_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -190,7 +339,17 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
 .toast.show{opacity:1;transform:translateY(0)}
 .toast.error{border-color:var(--danger);color:var(--danger)}
 .toast.success{border-color:var(--accent);color:var(--accent)}
-@media print{.topbar,.tabs,.export-bar,.slide-nav-bar,.nav-row{display:none!important}.slide{display:block!important;page-break-after:always}.slides-wrap{padding:0!important}body{background:#fff!important}}
+@media print{
+  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+  .topbar,.tabs,.export-bar,.slide-nav-bar,.nav-row,.screen:not(#reportScreen){display:none!important}
+  #reportScreen{display:block!important}
+  .slide{display:block!important;page-break-after:always;margin-bottom:0!important}
+  .slides-wrap{padding:0!important;max-width:100%!important}
+  body{background:#fff!important;color:#111!important}
+  .s-light{box-shadow:none!important;border:1px solid #eee!important}
+  .s-cover{page-break-after:always}
+  .slide-nav-bar{display:none!important}
+}
 </style>
 </head>
 <body>
@@ -207,8 +366,44 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
   </div>
 </div>
 
+<!-- GATE SCREEN -->
+<div id="gateScreen" class="screen active">
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:28px">
+    <div style="width:100%;max-width:400px">
+
+      <!-- Logo / branding -->
+      <div style="text-align:center;margin-bottom:36px">
+        <div style="width:64px;height:64px;border-radius:16px;background:var(--accent);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:22px;color:#fff;margin-bottom:16px">BD</div>
+        <div style="font-family:'DM Serif Display',serif;font-size:28px;color:#fff;margin-bottom:6px">Brand Diagnostic Tool</div>
+        <div style="font-size:14px;color:var(--text2)">Enter your access code to continue</div>
+      </div>
+
+      <!-- Code entry card -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px">
+        <label style="font-size:11px;font-weight:700;color:#fff;letter-spacing:.08em;text-transform:uppercase;display:block;margin-bottom:10px">Access Code</label>
+        <input
+          class="fi"
+          id="accessCodeInput"
+          placeholder="Enter your code"
+          style="text-transform:uppercase;letter-spacing:.12em;font-size:16px;font-weight:600;margin-bottom:6px;text-align:center"
+          onkeydown="if(event.key==='Enter')submitAccessCode()"
+        >
+        <div id="codeError" style="font-size:12px;color:var(--danger);margin-bottom:12px;min-height:18px;text-align:center"></div>
+        <button class="btn-next" id="codeSubmitBtn" style="width:100%;padding:14px;font-size:14px" onclick="submitAccessCode()">
+          Access Tool →
+        </button>
+      </div>
+
+      <div style="text-align:center;margin-top:20px;font-size:12px;color:var(--text3)">
+        Your access code was included with your program enrollment.<br>Contact support if you need help.
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <!-- MODE SELECT -->
-<div id="modeScreen" class="screen active">
+<div id="modeScreen" class="screen">
   <div class="mode-wrap">
     <div class="mode-title">Brand Diagnostic Tool</div>
     <div class="mode-sub">Set up your agency branding, then choose your diagnostic type</div>
@@ -1297,10 +1492,87 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowRight'||e.key==='ArrowDown')nextSlide();
   if(e.key==='ArrowLeft'||e.key==='ArrowUp')prevSlide();
 });
+// ─── Gate / Auth ─────────────────────────────────────────────────────────────
+var authToken = sessionStorage.getItem('bd_auth_token') || null;
+var authName = sessionStorage.getItem('bd_auth_name') || null;
+
+function submitAccessCode() {
+  var code = (document.getElementById('accessCodeInput').value || '').trim();
+  var errEl = document.getElementById('codeError');
+  var btn = document.getElementById('codeSubmitBtn');
+  errEl.textContent = '';
+  if (!code) { errEl.textContent = 'Please enter your access code'; return; }
+
+  btn.textContent = 'Checking...'; btn.disabled = true;
+
+  fetch('/auth/validate', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ code: code })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (d.ok) {
+      authToken = d.token;
+      authName = d.name || 'Member';
+      sessionStorage.setItem('bd_auth_token', authToken);
+      sessionStorage.setItem('bd_auth_name', authName);
+      showScreen('modeScreen');
+      document.getElementById('topbarName').textContent = authName + ' — Brand Diagnostic';
+    } else {
+      errEl.textContent = d.error || 'Invalid code';
+      btn.textContent = 'Access Tool →'; btn.disabled = false;
+    }
+  })
+  .catch(function() {
+    errEl.textContent = 'Connection error — please try again';
+    btn.textContent = 'Access Tool →'; btn.disabled = false;
+  });
+}
+
+// On load — check if we have a stored session
+(function() {
+  if (authToken) {
+    // Validate stored token is still good
+    fetch('/auth/check', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ token: authToken })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) {
+        showScreen('modeScreen');
+        if (authName) document.getElementById('topbarName').textContent = authName + ' — Brand Diagnostic';
+      } else {
+        sessionStorage.removeItem('bd_auth_token');
+        sessionStorage.removeItem('bd_auth_name');
+        authToken = null;
+        showScreen('gateScreen');
+      }
+    })
+    .catch(function() { showScreen('gateScreen'); });
+  } else {
+    showScreen('gateScreen');
+  }
+})();
+
+// Intercept fetch to add auth token to all /generate requests
+var _origFetch = window.fetch;
+window.fetch = function(url, opts) {
+  if (typeof url === 'string' && url.indexOf('/generate') === 0 && authToken) {
+    opts = opts || {};
+    opts.headers = Object.assign({}, opts.headers || {}, { 'x-auth-token': authToken });
+  }
+  return _origFetch.apply(this, arguments);
+};
+
 updateTopbarLogo();
 </script>
 </body>
-</html>`;
+</html>
+`;
+
 
 
 app.get('/', (req, res) => {
@@ -1310,21 +1582,16 @@ app.get('/', (req, res) => {
 
 // ─── Main report generation endpoint ─────────────────────────────────────────
 app.post('/generate', async (req, res) => {
+  // Auth check - require valid session token
+  const reqAuthToken = req.headers['x-auth-token'] || req.body.authToken;
+  if (!reqAuthToken || !sessions[reqAuthToken]) {
+    return res.status(401).json({ error: 'Access code required. Please refresh and enter your code.' });
+  }
+
   let { domain, clientName, mode, bizType, agency, answers, adsReports } = req.body;
   // Fallbacks if fields are empty
   domain = (domain || '').trim() || (clientName||'client').toLowerCase().replace(/[^a-z0-9]/g,'-') + '.com';
   clientName = (clientName || '').trim() || domain || 'Client';
-
-  // Merge ads reports: check server-side store (more reliable than payload for large files)
-  const sessionId = agency && agency.logoSessionId;
-  if (sessionId && adsReportStore[sessionId]) {
-    const stored = adsReportStore[sessionId];
-    if (!adsReports) adsReports = {};
-    if (stored.meta && !adsReports.meta) adsReports.meta = stored.meta;
-    if (stored.google && !adsReports.google) adsReports.google = stored.google;
-  }
-
-  // Be lenient - use fallbacks if fields are empty
 
   try {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -1388,8 +1655,7 @@ app.post('/generate', async (req, res) => {
     send('progress', { msg: 'Researching reviews & brand signals', pct: 68 });
     const research = await webResearch(clientName, domain);
 
-    const hasAdsUpload = adsReports && (adsReports.meta || adsReports.google);
-    send('progress', { msg: hasAdsUpload ? 'Running AI analysis (6 parallel passes including ads audit)...' : 'Running AI analysis (5 parallel passes)...', pct: 82 });
+    send('progress', { msg: 'Running AI analysis (5 parallel passes)...', pct: 82 });
     const report = await runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers, adsReports || {});
     report.web_research = research;
 
@@ -1877,45 +2143,20 @@ Return ONLY valid JSON:
 }
 
 // ─── Claude API helpers ───────────────────────────────────────────────────────
-async function callClaude(prompt, maxTokens, useSearch, retryCount = 0) {
+async function callClaude(prompt, maxTokens, useSearch) {
   const tools = useSearch ? [{ type: 'web_search_20250305', name: 'web_search' }] : undefined;
   const msg = await anthropic.messages.create({
     model: 'claude-sonnet-4-20250514',
     max_tokens: maxTokens || 2000,
-    system: 'You are a world-class brand strategist and growth consultant. Every output is a paid deliverable. Be specific, commercially sharp, and data-driven. Use real numbers. No generic filler. Return ONLY valid JSON — no markdown, no fences, no extra text. Ensure all strings are properly escaped. Never include unescaped newlines inside JSON string values.',
+    system: 'You are a world-class brand strategist and growth consultant. Every output is a paid deliverable. Be specific, commercially sharp, and data-driven. Use real numbers. No generic filler. Return ONLY valid JSON — no markdown, no fences, no extra text.',
     tools: tools,
     messages: [{ role: 'user', content: prompt }]
   });
   const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
   const clean = text.replace(/```[\w]*/g, '').replace(/```/g, '').trim();
   const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
-  if (s < 0 || e <= s) throw new Error('No JSON object found in response');
-  const jsonStr = clean.substring(s, e + 1);
-  try {
-    return stripCites(JSON.parse(jsonStr));
-  } catch (parseErr) {
-    // Attempt to fix common JSON issues
-    const fixed = jsonStr
-      .replace(/([^\\])\n/g, '$1 ')      // unescaped newlines in strings
-      .replace(/([^\\])\r/g, '$1 ')      // unescaped carriage returns
-      .replace(/([^\\])\t/g, '$1 ')      // unescaped tabs
-      .replace(/,\s*([}\]])/g, '$1')      // trailing commas
-      .replace(/([{,]\s*)(\w+)\s*:/g, '$1"$2":'); // unquoted keys
-    try {
-      return stripCites(JSON.parse(fixed));
-    } catch (fixErr) {
-      // Retry once with stronger instruction
-      if (retryCount < 1) {
-        console.warn('JSON parse failed, retrying with stricter prompt...');
-        return callClaude(
-          prompt + '\n\nCRITICAL: Your previous response had invalid JSON. Return ONLY a single valid JSON object. No text before or after. No newlines inside string values — use spaces instead.',
-          maxTokens, useSearch, retryCount + 1
-        );
-      }
-      console.error('JSON parse failed after retry. Raw:', jsonStr.slice(0, 500));
-      throw new Error('JSON parse error: ' + parseErr.message);
-    }
-  }
+  if (s >= 0 && e > s) return stripCites(JSON.parse(clean.substring(s, e + 1)));
+  throw new Error('Failed to parse JSON from Claude response');
 }
 
 async function callClaudeWithSearch(prompt, maxTokens) {
