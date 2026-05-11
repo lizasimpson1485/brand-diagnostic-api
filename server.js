@@ -190,7 +190,7 @@ app.post('/auth/revoke', (req, res) => {
   res.json({ ok: true, message: 'Code revoked and sessions cleared' });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, version: '2.2.0' }));
+app.get('/health', (req, res) => res.json({ ok: true, version: '2.3.0' }));
 
 const TOOL_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -340,15 +340,32 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
 .toast.error{border-color:var(--danger);color:var(--danger)}
 .toast.success{border-color:var(--accent);color:var(--accent)}
 @media print{
-  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;color-adjust:exact!important}
   .topbar,.tabs,.export-bar,.slide-nav-bar,.nav-row,.screen:not(#reportScreen){display:none!important}
   #reportScreen{display:block!important}
-  .slide{display:block!important;page-break-after:always;margin-bottom:0!important}
-  .slides-wrap{padding:0!important;max-width:100%!important}
-  body{background:#fff!important;color:#111!important}
-  .s-light{box-shadow:none!important;border:1px solid #eee!important}
-  .s-cover{page-break-after:always}
-  .slide-nav-bar{display:none!important}
+  body{background:#fff!important}
+  .slides-wrap{padding:0!important;max-width:100%!important;background:#fff!important}
+  .slide{display:block!important;page-break-after:always;margin-bottom:20px!important;background:#fff!important}
+  .s-light{background:#fff!important;box-shadow:none!important;border:1px solid #ddd!important}
+  .s-light-body{background:#fff!important}
+  .s-light-header{background:#fff!important}
+  .s-footer{background:#f5f5f5!important}
+  .s-title,.r-gap-title{color:#111!important}
+  .s-body,p,div,span,td,th,li{color:#333!important}
+  .r-metric-label{color:#666!important}
+  .r-metric-val{color:#111!important}
+  .r-chk-text{color:#333!important}
+  .r-rm-label{color:#111!important}
+  .r-rm-items li{color:#444!important}
+  .r-data-table td{color:#222!important}
+  .r-data-table th{color:#555!important}
+  .r-gap{border-left-width:4px!important;border-left-style:solid!important}
+  .r-gap.critical{background:#fef2f2!important;border-left-color:#dc2626!important}
+  .r-gap.warning{background:#fffbeb!important;border-left-color:#d97706!important}
+  .r-gap.opportunity{background:#f0fdf4!important;border-left-color:#16a34a!important}
+  .r-metric{background:#f5f5f5!important}
+  .r-rm-card{background:#f5f5f5!important}
+  .r-persona{background:#f5f5f5!important}
 }
 </style>
 </head>
@@ -1493,6 +1510,7 @@ document.addEventListener('keydown',function(e){
   if(e.key==='ArrowLeft'||e.key==='ArrowUp')prevSlide();
 });
 // ─── Gate / Auth ─────────────────────────────────────────────────────────────
+// Auth state - cleared on each page load since server sessions reset on deploy
 var authToken = sessionStorage.getItem('bd_auth_token') || null;
 var authName = sessionStorage.getItem('bd_auth_name') || null;
 
