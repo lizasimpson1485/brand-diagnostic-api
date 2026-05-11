@@ -132,38 +132,38 @@ app.post('/auth/validate', async (req, res) => {
     return res.status(400).json({ error: 'Please enter your access code' });
   }
 
-  // If no GHL key configured, fall back to env MEMBER_CODES
-  if (!GHL_API_KEY) {
-    const fallbackCodes = new Set(
-      (process.env.MEMBER_CODES || '').split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
-    );
-    if (fallbackCodes.size > 0 && fallbackCodes.has(code.trim().toUpperCase())) {
+  const upperCode = code.trim().toUpperCase();
+
+  // ALWAYS check MEMBER_CODES first — works regardless of GHL config
+  const memberCodes = new Set(
+    (process.env.MEMBER_CODES || '').split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
+  );
+  if (memberCodes.has(upperCode)) {
+    const token = generateToken();
+    sessions[token] = { contactId: 'manual', contactName: 'Member', code: upperCode };
+    return res.json({ ok: true, token, name: 'Member' });
+  }
+
+  // Then try GHL if configured
+  if (GHL_API_KEY) {
+    const contact = await validateCodeAgainstGHL(code);
+    if (contact) {
       const token = generateToken();
-      sessions[token] = { contactId: 'manual', contactName: 'Member', code: code.trim().toUpperCase() };
-      return res.json({ ok: true, token, name: 'Member' });
+      sessions[token] = {
+        contactId: contact.id,
+        contactName: ((contact.firstName || '') + ' ' + (contact.lastName || '')).trim(),
+        contactEmail: contact.email || '',
+        code: upperCode
+      };
+      return res.json({
+        ok: true, token,
+        name: ((contact.firstName || '') + ' ' + (contact.lastName || '')).trim() || 'Member'
+      });
     }
-    return res.status(401).json({ error: 'Invalid access code' });
   }
 
-  // Validate against GHL
-  const contact = await validateCodeAgainstGHL(code);
-  if (!contact) {
-    return res.status(401).json({ error: 'Invalid access code. Please check your code and try again.' });
-  }
-
-  const token = generateToken();
-  sessions[token] = {
-    contactId: contact.id,
-    contactName: (contact.firstName || '') + ' ' + (contact.lastName || ''),
-    contactEmail: contact.email || '',
-    code: code.trim().toUpperCase()
-  };
-
-  res.json({
-    ok: true,
-    token,
-    name: ((contact.firstName || '') + ' ' + (contact.lastName || '')).trim() || 'Member'
-  });
+  // Nothing matched
+  return res.status(401).json({ error: 'Invalid access code. Please check your code and try again.' });
 });
 
 // Check if a session token is still valid
@@ -190,7 +190,7 @@ app.post('/auth/revoke', (req, res) => {
   res.json({ ok: true, message: 'Code revoked and sessions cleared' });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, version: '2.3.0' }));
+app.get('/health', (req, res) => res.json({ ok: true, version: '2.4.0' }));
 
 const TOOL_HTML = `<!DOCTYPE html>
 <html lang="en">
