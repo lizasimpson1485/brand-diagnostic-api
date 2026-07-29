@@ -13,20 +13,17 @@ const AHREFS_API_KEY = process.env.AHREFS_API_KEY;
 const PORT = process.env.PORT || 3000;
 
 // ─── GoHighLevel config ───────────────────────────────────────────────────────
-// GHL API key and custom field key for the diagnostic code
-const GHL_API_KEY   = process.env.GHL_API_KEY   || '';   // GHL private integration API key
-const GHL_CODE_FIELD    = process.env.GHL_CODE_FIELD    || 'diagnostic_code'; // custom field key
-const GHL_LOCATION_ID  = process.env.GHL_LOCATION_ID  || '';  // GHL Location/Sub-account ID
+const GHL_API_KEY   = process.env.GHL_API_KEY   || '';
+const GHL_CODE_FIELD    = process.env.GHL_CODE_FIELD    || 'diagnostic_code';
+const GHL_LOCATION_ID  = process.env.GHL_LOCATION_ID  || '';
 
 // ─── In-memory stores ─────────────────────────────────────────────────────────
 const logoStore      = {};
 const adsReportStore = {};
-// sessions: token -> { contactId, contactName, contactEmail, code }
 const sessions = {};
-// code cache: code -> contactId (avoid repeated GHL lookups, expires after 1 hour)
 const codeCache = {};
 const codeCacheTime = {};
-const CODE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const CODE_CACHE_TTL = 60 * 60 * 1000;
 
 // ─── GHL API helper ───────────────────────────────────────────────────────────
 async function ghlRequest(path, method = 'GET', body = null) {
@@ -37,7 +34,7 @@ async function ghlRequest(path, method = 'GET', body = null) {
       path,
       method,
       headers: {
-        'Authorization': `Bearer \${GHL_API_KEY}`,
+        'Authorization': `Bearer ${GHL_API_KEY}`,
         'Version': '2021-07-28',
         'Content-Type': 'application/json',
         ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {})
@@ -57,24 +54,19 @@ async function ghlRequest(path, method = 'GET', body = null) {
   });
 }
 
-// Search GHL contacts for one that has this exact code in the custom field
 async function validateCodeAgainstGHL(code) {
   const upperCode = code.trim().toUpperCase();
 
-  // Check cache first
   const cached = codeCache[upperCode];
   if (cached && (Date.now() - codeCacheTime[upperCode]) < CODE_CACHE_TTL) {
-    return cached; // returns contact object or null
+    return cached;
   }
 
   try {
-    // Search contacts - try searching by custom field value
-    // GHL v2: search all contacts and filter by custom field
     const searchPath = '/contacts/?locationId=' + encodeURIComponent(process.env.GHL_LOCATION_ID || '') +
       '&query=' + encodeURIComponent(upperCode) + '&limit=20';
     const result = await ghlRequest(searchPath);
     const contacts = result.contacts || [];
-    // Find contact with matching custom field value
     const contact = contacts.find(function(c) {
       const fields = c.customFields || c.customField || [];
       return fields.some(function(f) {
@@ -83,13 +75,11 @@ async function validateCodeAgainstGHL(code) {
         return val === upperCode;
       });
     }) || null;
-    // Cache result
     codeCache[upperCode] = contact;
     codeCacheTime[upperCode] = Date.now();
     return contact;
   } catch (err) {
     console.error('GHL lookup error:', err.message);
-    // If GHL is unreachable, fail closed (deny access)
     return null;
   }
 }
@@ -134,7 +124,6 @@ app.post('/auth/validate', async (req, res) => {
 
   const upperCode = code.trim().toUpperCase();
 
-  // ALWAYS check MEMBER_CODES first — works regardless of GHL config
   const memberCodes = new Set(
     (process.env.MEMBER_CODES || '').split(',').map(c => c.trim().toUpperCase()).filter(Boolean)
   );
@@ -144,7 +133,6 @@ app.post('/auth/validate', async (req, res) => {
     return res.json({ ok: true, token, name: 'Member' });
   }
 
-  // Then try GHL if configured
   if (GHL_API_KEY) {
     const contact = await validateCodeAgainstGHL(code);
     if (contact) {
@@ -162,11 +150,9 @@ app.post('/auth/validate', async (req, res) => {
     }
   }
 
-  // Nothing matched
   return res.status(401).json({ error: 'Invalid access code. Please check your code and try again.' });
 });
 
-// Check if a session token is still valid
 app.post('/auth/check', (req, res) => {
   const { token } = req.body;
   if (token && sessions[token]) {
@@ -175,22 +161,80 @@ app.post('/auth/check', (req, res) => {
   res.status(401).json({ ok: false, error: 'Session expired' });
 });
 
-// Admin: invalidate a code (call from GHL webhook when membership is revoked)
 app.post('/auth/revoke', (req, res) => {
   const { code, adminKey } = req.body;
   if (adminKey !== process.env.ADMIN_KEY) return res.status(401).json({ error: 'Unauthorized' });
   const upperCode = (code || '').trim().toUpperCase();
-  // Remove from cache so next lookup hits GHL fresh
   delete codeCache[upperCode];
   delete codeCacheTime[upperCode];
-  // Invalidate all sessions with this code
   Object.keys(sessions).forEach(token => {
     if (sessions[token].code === upperCode) delete sessions[token];
   });
   res.json({ ok: true, message: 'Code revoked and sessions cleared' });
 });
 
-app.get('/health', (req, res) => res.json({ ok: true, version: '2.4.0' }));
+app.get('/health', (req, res) => res.json({ ok: true, version: '2.5.0' }));
+
+// ─── Source diagnostics endpoint ─────────────────────────────────────────────
+// Visit /debug/sources?key=YOUR_ADMIN_KEY to test each data source live
+app.get('/debug/sources', async (req, res) => {
+  if (process.env.ADMIN_KEY && req.query.key !== process.env.ADMIN_KEY) {
+    return res.status(401).json({ error: 'Add ?key=YOUR_ADMIN_KEY to the URL' });
+  }
+
+  const out = {
+    env_vars_set: {
+      ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
+      AHREFS_API_KEY: !!process.env.AHREFS_API_KEY,
+      GHL_API_KEY: !!process.env.GHL_API_KEY,
+      GHL_LOCATION_ID: !!process.env.GHL_LOCATION_ID,
+      MEMBER_CODES: !!process.env.MEMBER_CODES,
+      ADMIN_KEY: !!process.env.ADMIN_KEY
+    },
+    ahrefs: { ok: false },
+    anthropic: { ok: false },
+    anthropic_with_search: { ok: false }
+  };
+
+  try {
+    const testUrl = 'https://api.ahrefs.com/v3/site-explorer/domain-rating?target=ahrefs.com&date=' + ahrefsDate();
+    const r = await fetch(testUrl, { headers: { Authorization: 'Bearer ' + AHREFS_API_KEY } });
+    out.ahrefs.http_status = r.status;
+    out.ahrefs.ok = r.ok;
+    const body = await r.text();
+    if (!r.ok) out.ahrefs.error_body = body.slice(0, 300);
+    else out.ahrefs.sample = body.slice(0, 200);
+  } catch (e) {
+    out.ahrefs.error = e.message;
+  }
+
+  try {
+    const m = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 10,
+      messages: [{ role: 'user', content: 'Reply with the word ok' }]
+    });
+    out.anthropic.ok = true;
+    out.anthropic.model_returned = m.model;
+  } catch (e) {
+    out.anthropic.error = e.message;
+    out.anthropic.hint = 'If this says model not found, check https://docs.claude.com for current model names';
+  }
+
+  try {
+    const m2 = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 50,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      messages: [{ role: 'user', content: 'What year is it? One word.' }]
+    });
+    out.anthropic_with_search.ok = true;
+  } catch (e) {
+    out.anthropic_with_search.error = e.message;
+  }
+
+  res.json(out);
+});
 
 const TOOL_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -409,6 +453,9 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
         <button class="btn-next" id="codeSubmitBtn" style="width:100%;padding:14px;font-size:14px" onclick="submitAccessCode()">
           Access Tool →
         </button>
+        <div style="text-align:center;margin-top:14px">
+          <span style="font-size:12px;color:var(--text3);cursor:pointer;text-decoration:underline" onclick="loadSampleReport()">Load sample report (test mode — skips login and APIs)</span>
+        </div>
       </div>
 
       <div style="text-align:center;margin-top:20px;font-size:12px;color:var(--text3)">
@@ -463,7 +510,9 @@ body{font-family:'Inter',sans-serif;background:#060a0f;color:#f0f4f8;min-height:
         <ul class="mode-card-list"><li>13 in-depth sections</li><li>Live Ahrefs + competitor data</li><li>Website + ads + reviews audit</li><li>Full business canvas</li><li>Revenue forecast model</li><li>Full branded slide deck</li></ul>
       </div>
     </div>
-    <div style="text-align:center"><button class="btn-next" id="startBtn" disabled onclick="startDiagnostic()">Start Diagnostic →</button></div>
+    <div style="text-align:center"><button class="btn-next" id="startBtn" disabled onclick="startDiagnostic()">Start Diagnostic →</button>
+      <div style="margin-top:14px"><span style="font-size:12px;color:var(--text3);cursor:pointer;text-decoration:underline" onclick="loadSampleReport()">Or load a sample report to test the output</span></div>
+    </div>
   </div>
 </div>
 
@@ -1585,608 +1634,514 @@ window.fetch = function(url, opts) {
   return _origFetch.apply(this, arguments);
 };
 
+// ─── SAMPLE DATA MODE ─────────────────────────────────────────────────────────
+// Renders a full fake report client-side. No login, no server call, no APIs.
+// If this renders correctly, the frontend is fine and any problem is in the
+// data retrieval chain (Ahrefs / Claude / auth). Check /debug/sources next.
+
+var SAMPLE_AHREFS = {
+  domain_rating: 28, ahrefs_rank: 4823411,
+  org_traffic: 4200, org_keywords: 861, org_keywords_1_3: 12,
+  org_cost: 385000, paid_traffic: 0, paid_keywords: 0, paid_pages: 0,
+  backlinks_live: 1240, ref_domains: 186,
+  keywords: [
+    {keyword:'outdoor storage boxes', best_position:4, volume:2900, sum_traffic:410, keyword_difficulty:18},
+    {keyword:'garden sheds melbourne', best_position:7, volume:1600, sum_traffic:190, keyword_difficulty:24},
+    {keyword:'deck box australia', best_position:2, volume:880, sum_traffic:320, keyword_difficulty:11},
+    {keyword:'resin outdoor furniture', best_position:12, volume:1300, sum_traffic:85, keyword_difficulty:31},
+    {keyword:'vertical garden shed', best_position:9, volume:720, sum_traffic:60, keyword_difficulty:15},
+    {keyword:'pool storage box', best_position:15, volume:590, sum_traffic:22, keyword_difficulty:9},
+    {keyword:'outdoor bench seat storage', best_position:6, volume:480, sum_traffic:70, keyword_difficulty:14},
+    {keyword:'plastic garden shed 8x6', best_position:19, volume:390, sum_traffic:8, keyword_difficulty:12}
+  ],
+  competitors: [
+    {competitor_domain:'bunnings.com.au', domain_rating:78, keywords_common:412, traffic:8200000},
+    {competitor_domain:'keter.com', domain_rating:64, keywords_common:238, traffic:96000},
+    {competitor_domain:'stratco.com.au', domain_rating:55, keywords_common:190, traffic:310000},
+    {competitor_domain:'gardenstreet.com.au', domain_rating:31, keywords_common:88, traffic:14500},
+    {competitor_domain:'shedsonline.com.au', domain_rating:26, keywords_common:64, traffic:9800}
+  ],
+  top_pages: [
+    {url:'/collections/deck-boxes', sum_traffic:610, keywords:120},
+    {url:'/products/230l-outdoor-storage-box', sum_traffic:380, keywords:64}
+  ]
+};
+
+var SAMPLE_RESEARCH = {
+  review_summary: 'Consistently strong 4-plus star sentiment on Google and ProductReview. Customers praise delivery speed and build quality; assembly instructions are the recurring complaint.',
+  avg_rating: '4.4/5', review_count: '212',
+  common_praise: ['Fast metro delivery','Sturdy build quality','Easy checkout and clear pricing'],
+  common_complaints: ['Confusing assembly instructions','Slow response to warranty emails'],
+  review_platforms: ['Google','ProductReview.com.au'],
+  ads_running: false, ad_platforms: [],
+  ad_description: 'No active ads found in Meta Ad Library or Google Ads Transparency Centre. Competitors are running always-on catalogue and search campaigns.',
+  ad_spend_estimate: 'low',
+  website_assessment: 'Clean Shopify build with good product photography. Weak above-the-fold value proposition, no urgency or social proof near the buy button, and no exit-intent capture.',
+  website_cro_score: 'fair',
+  website_trust_signals: ['SSL and clear returns policy','Visible ABN and Melbourne address','Klarna and Afterpay badges'],
+  website_cro_issues: ['No reviews shown on product pages','Shipping cost only revealed at checkout','No email capture offer for first-time visitors'],
+  offer_analysis: 'Product-led offer with no bundling, no free-shipping threshold and no first-order incentive. Competitors bundle accessories and anchor with bulk discounts.',
+  offer_strength: 'moderate', pricing_visible: true,
+  social_presence: 'Instagram active weekly, Facebook dormant since March, no TikTok presence.',
+  social_platforms: [
+    {platform:'Instagram', followers:'6.2K', activity:'medium'},
+    {platform:'Facebook', followers:'11K', activity:'low'}
+  ],
+  content_strategy: 'Sporadic blog posts, no keyword targeting, no buying guides.',
+  recent_news: [], brand_reputation: 'positive',
+  competitive_position: 'Niche challenger squeezed between Bunnings on price visibility and Keter on brand.',
+  biggest_digital_gap: 'Zero paid traffic while competitors capture the entire bottom-of-funnel search demand'
+};
+
+var SAMPLE_REPORT = {
+  exec_past: 'Acme Outdoor Living (acmeoutdoor.com.au) sits at DR 28 with 4,200 organic visits per month across 861 keywords, but only 12 in top-3 positions. Organic traffic is worth roughly $3,850/month, yet paid traffic is zero, meaning every high-intent search buyer is being handed to Bunnings and Keter. Reviews are strong at 4.4/5 (212 reviews) but none of that proof appears on product pages.',
+  exec_future: 'The stated goal is $2M revenue within 12 months, up from the current $500K-$1M band. Hitting it means roughly doubling monthly order volume while lifting AOV through bundling.',
+  exec_agency: 'We recommend a paid-search-first launch to capture existing bottom-of-funnel demand, paired with a CRO sprint on product pages, then a Meta catalogue layer once conversion tracking is proven.',
+  revenue_now: '$780K', revenue_target: '$2M',
+  revenue_forecast_conservative: '$1.2M', revenue_forecast_optimistic: '$1.9M',
+  forecast_reasoning: 'Conservative assumes Google Shopping at 3.5x ROAS on $8K/month plus a 0.4-point conversion rate lift from CRO fixes. Optimistic adds Meta catalogue ads at 2.8x ROAS and a bundling strategy lifting AOV from $85 to $110. Both assume the existing 4.4-star review base is surfaced on product pages.',
+  gaps: [
+    {title:'No paid search capture', type:'critical', desc:'Zero Google Ads presence while ranking organically for high-intent terms. Competitors bid on these exact keywords, intercepting buyers at the final click. Estimated $12K-$18K/month revenue opportunity.'},
+    {title:'Review proof invisible on product pages', type:'critical', desc:'212 reviews at 4.4/5 exist off-site but no widget on product pages. Adding on-page reviews typically lifts PDP conversion 8-15%.'},
+    {title:'Shipping cost shock at checkout', type:'warning', desc:'Shipping revealed only at final step, a classic abandonment driver. A free-shipping threshold at $120 would also push AOV up from $85.'},
+    {title:'No email capture or post-purchase flow', type:'warning', desc:'No welcome offer, no abandoned cart sequence, no repeat-purchase campaign. Email should contribute 15-25% of ecommerce revenue.'},
+    {title:'Bundling and AOV opportunity', type:'opportunity', desc:'Accessories are sold separately with no bundle logic. Competitors bundle at a 12% discount and lift AOV 20%+.'}
+  ],
+  forecast: {
+    current_revenue: '$780K',
+    conservative_12m: '$1.2M', optimistic_12m: '$1.9M',
+    revenue_per_channel: [
+      {channel:'Google Shopping + Search', current:'$0', potential:'$540K/yr'},
+      {channel:'Organic / SEO', current:'$420K/yr', potential:'$560K/yr'},
+      {channel:'Meta catalogue ads', current:'$0', potential:'$310K/yr'},
+      {channel:'Email & retention', current:'~$20K/yr', potential:'$190K/yr'}
+    ],
+    key_assumptions: ['Google Shopping launches at 3.5x blended ROAS','CRO fixes lift sitewide conversion from 1.6% to 2.1%','Email flows reach 18% of revenue by month 9']
+  },
+  personas: [{
+    name: 'Backyard Ben', tagline: 'The weekend project homeowner',
+    who: 'Male 35-54, outer-suburban Melbourne or Brisbane, owns his home, household income $120K-$180K, shops Bunnings on Saturdays',
+    dream_outcome: 'A backyard that looks sorted, everything has its place and it did not take a tradie to get there',
+    pains: ['Clutter shaming from partner','Cheap boxes that crack in the sun','Assembly nightmares','Not knowing what fits the space'],
+    objections: ['Is it cheaper at Bunnings?','Will it survive Aussie UV?','How hard is assembly?'],
+    messaging_hook: 'The last outdoor storage box you will buy. 10-year UV warranty, assembled in 20 minutes.'
+  }],
+  competitor_analysis: {
+    summary: 'Bunnings dominates on 412 shared keywords with DR 78 and effectively unlimited paid budget, but competes on price and range rather than expertise. Keter holds brand searches. The winnable ground is the considered-purchase buyer who wants guidance, bundles and proof, territory neither giant serves well.',
+    market_gaps: ['No competitor offers a size-finder or fit-guide tool','Bundle-and-save is underused in the category','Assembly-support content is absent across all competitors'],
+    keyword_gaps: ['keter alternative australia (720/mo)','best outdoor storage box 2026 (480/mo)','pool equipment storage ideas (390/mo)']
+  },
+  ads_analysis: {
+    overall_grade: 'C',
+    overall_summary: 'Sample uploaded account shows $6,400 spend over 90 days at 2.1x blended ROAS. Meta prospecting is carrying the account while three ad sets with $1,900 of spend returned under 1x. No Advantage+ catalogue campaign exists despite a full Shopify feed. Google is limited to one underfunded Search campaign.',
+    total_spend_period: '$6,400', total_revenue_period: '$13,440', overall_roas: '2.1x',
+    critical_issues: [
+      {issue:'Three Meta ad sets below 1x ROAS still active', impact:'~$630/month wasted', fix:'Pause and consolidate budget into the two winning interest stacks'},
+      {issue:'No conversion value tracking on Google', impact:'Cannot optimise to ROAS', fix:'Enable enhanced conversions and import Shopify purchase values'}
+    ],
+    meta_ads: {
+      present: true, spend:'$4,900', revenue:'$10,780', roas:'2.2x', cpc:'$1.14', ctr:'1.8%', cpm:'$14.20',
+      best_performing:'Broad prospecting with UGC video creative at 3.4x ROAS',
+      budget_waste:'~$630/month in sub-1x ad sets',
+      quick_wins:['Consolidate to broad + Advantage+','Launch catalogue sales campaign','Brief 3 more UGC videos off the winning script']
+    },
+    google_ads: {
+      present: true, spend:'$1,500', revenue:'$2,660', roas:'1.8x', ctr:'3.2%',
+      best_performing:'Exact-match deck box terms',
+      budget_waste:'~$280/month on broad generic terms',
+      quick_wins:['Launch Standard Shopping then PMax','Add negative keyword list','Raise budget on exact-match winners']
+    }
+  },
+  roadmap: [
+    {phase:'Phase 1', month:'Month 1-2', label:'Foundation & Quick Wins', items:[
+      {task:'Launch Google Shopping'},
+      {task:'Install on-page review widget'},
+      {task:'Free shipping threshold at $120'}
+    ]},
+    {phase:'Phase 2', month:'Month 3-4', label:'Scale Acquisition', items:[
+      {task:'Meta Advantage+ catalogue campaign'},
+      {task:'UGC creative sprint'},
+      {task:'Klaviyo flows live'}
+    ]},
+    {phase:'Phase 3', month:'Month 5-6', label:'Compound & Defend', items:[
+      {task:'Bundle builder launch'},
+      {task:'Content cluster: buying guides'},
+      {task:'Review generation automation'}
+    ]}
+  ],
+  checklist: [
+    {phase:'Foundation', items:['Set up GA4 with purchase events','Install Meta Pixel + Conversions API','Connect Google Search Console','Verify Merchant Centre feed']},
+    {phase:'Acquisition', items:['Build Shopping campaign structure','Write negative keyword list','Brief UGC creators','Set up Advantage+ catalogue campaign']},
+    {phase:'Conversion', items:['Install review widget on PDPs','Add shipping calculator to PDP','Launch exit-intent email capture','A/B test free-shipping bar']},
+    {phase:'Retention', items:['Migrate to Klaviyo','Build welcome flow with first-order offer','Build abandoned cart 3-email sequence','Set up day-10 review request']}
+  ],
+  closing: {
+    headline: 'A $400K-$1.1M revenue gap is sitting in channels this brand has never switched on',
+    narrative: 'This diagnostic found a brand with genuine equity: DR 28, 4.4 stars across 212 reviews, page-1 rankings on commercial terms, converting almost none of it into paid growth. Competitors capture an estimated $12K-$18K per month of demand this brand already ranks for organically. Every month of delay is roughly $15K of revenue handed to Bunnings and Keter. The fixes are known, sequenced and mostly low-effort.',
+    next_step: 'Approve the Phase 1 quick-wins sprint and have Google Shopping live within 14 days.'
+  }
+};
+
+function loadSampleReport() {
+  state.mode = state.mode || 'deep';
+  state.clientType = state.clientType || 'ecommerce';
+  if (!state.agency.name) {
+    var nmEl = document.getElementById('agencyName');
+    var clEl = document.getElementById('agencyColor');
+    var emEl = document.getElementById('agencyEmail');
+    state.agency.name = (nmEl && nmEl.value) || 'Your Agency';
+    state.agency.color = (clEl && clEl.value) || '#3cc168';
+    state.agency.email = (emEl && emEl.value) || 'hello@agency.com';
+  }
+  document.getElementById('progressWrap').style.display = 'none';
+  showToast('Sample report loaded — no APIs called', 'success');
+  renderReport(SAMPLE_REPORT, SAMPLE_AHREFS, 'Acme Outdoor Living', 'acmeoutdoor.com.au', state.agency, SAMPLE_RESEARCH);
+}
+// ─── END SAMPLE DATA MODE ─────────────────────────────────────────────────────
+
 updateTopbarLogo();
 </script>
 </body>
 </html>
 `;
 
-
-
+// ─── Serve the tool ───────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Content-Type', 'text/html');
   res.send(TOOL_HTML);
 });
 
-// ─── Main report generation endpoint ─────────────────────────────────────────
-app.post('/generate', async (req, res) => {
-  // Auth check - require valid session token
-  const reqAuthToken = req.headers['x-auth-token'] || req.body.authToken;
-  if (!reqAuthToken || !sessions[reqAuthToken]) {
-    return res.status(401).json({ error: 'Access code required. Please refresh and enter your code.' });
-  }
+// ─── Ahrefs helpers ───────────────────────────────────────────────────────────
+function ahrefsDate() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
 
-  let { domain, clientName, mode, bizType, agency, answers, adsReports } = req.body;
-  // Fallbacks if fields are empty
-  domain = (domain || '').trim() || (clientName||'client').toLowerCase().replace(/[^a-z0-9]/g,'-') + '.com';
-  clientName = (clientName || '').trim() || domain || 'Client';
-
+async function ahrefsGet(endpoint, params) {
   try {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    const send = (step, data) => res.write(`data: ${JSON.stringify({ step, ...data })}\n\n`);
-
-    send('progress', { msg: 'Fetching domain rating & metrics', pct: 10 });
-    const [drData, metricsData] = await Promise.all([
-      ahrefsGet('site-explorer/domain-rating', { target: domain, date: ahrefsDate() }),
-      ahrefsGet('site-explorer/metrics', { target: domain, date: ahrefsDate(), mode: 'subdomains' })
-    ]);
-
-    const ahrefs = {
-      domain_rating:    drData?.domain_rating?.domain_rating ?? 0,
-      ahrefs_rank:      drData?.domain_rating?.ahrefs_rank ?? null,
-      org_traffic:      metricsData?.metrics?.org_traffic ?? 0,
-      org_keywords:     metricsData?.metrics?.org_keywords ?? 0,
-      org_keywords_1_3: metricsData?.metrics?.org_keywords_1_3 ?? 0,
-      org_cost:         metricsData?.metrics?.org_cost ?? null,
-      paid_traffic:     metricsData?.metrics?.paid_traffic ?? 0,
-      paid_keywords:    metricsData?.metrics?.paid_keywords ?? 0,
-      paid_pages:       metricsData?.metrics?.paid_pages ?? 0,
-    };
-
-    send('progress', { msg: 'Pulling keyword rankings', pct: 25 });
-    const kwData = await ahrefsGet('site-explorer/organic-keywords', {
-      target: domain, date: ahrefsDate(), mode: 'subdomains',
-      limit: 12, order_by: 'sum_traffic:desc',
-      select: 'keyword,best_position,volume,sum_traffic,keyword_difficulty,is_transactional,is_commercial'
-    });
-    ahrefs.keywords = kwData?.keywords ?? [];
-
-    send('progress', { msg: 'Analysing competitors', pct: 40 });
-    // Detect country from domain TLD
-    const tld = domain.split('.').pop().toLowerCase();
-    const countryMap = {'au':'au','uk':'gb','co.uk':'gb','nz':'nz','ca':'ca','ie':'ie','sg':'sg','in':'in','za':'za'};
-    const detectedCountry = countryMap[tld] || 'us';
-
-    const compData = await ahrefsGet('site-explorer/organic-competitors', {
-      target: domain, date: ahrefsDate(), mode: 'subdomains',
-      country: detectedCountry, limit: 6, order_by: 'traffic:desc',
-      select: 'competitor_domain,domain_rating,keywords_common,traffic'
-    });
-    ahrefs.competitors = compData?.competitors ?? [];
-
-    send('progress', { msg: 'Fetching backlinks & top pages', pct: 55 });
-    const [blData, pagesData] = await Promise.all([
-      ahrefsGet('site-explorer/backlinks-stats', { target: domain, date: ahrefsDate(), mode: 'subdomains' }),
-      ahrefsGet('site-explorer/top-pages', {
-        target: domain, date: ahrefsDate(), mode: 'subdomains',
-        limit: 6, order_by: 'sum_traffic:desc',
-        select: 'url,sum_traffic,keywords,top_keyword'
-      })
-    ]);
-    ahrefs.backlinks_live = blData?.metrics?.live ?? 0;
-    ahrefs.ref_domains    = blData?.metrics?.live_refdomains ?? 0;
-    ahrefs.top_pages      = pagesData?.pages ?? [];
-
-    send('progress', { msg: 'Researching reviews & brand signals', pct: 68 });
-    const research = await webResearch(clientName, domain);
-
-    send('progress', { msg: 'Running AI analysis (5 parallel passes)...', pct: 82 });
-    const report = await runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers, adsReports || {});
-    report.web_research = research;
-
-    send('progress', { msg: 'Done', pct: 100 });
-    // Pass agency back so logo session ID is available client-side
-    send('result', { ahrefs, report, clientName, domain, agency, research });
-    res.end();
-
-  } catch (err) {
-    console.error('Generate error:', err);
-    try {
-      res.write(`data: ${JSON.stringify({ step: 'error', msg: err.message })}\n\n`);
-      res.end();
-    } catch(e) {}
-  }
-});
-
-// ─── Ahrefs REST helper ───────────────────────────────────────────────────────
-async function ahrefsGet(path, params) {
-  const url = new URL(`https://api.ahrefs.com/v3/${path}`);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null) url.searchParams.set(k, v);
-  });
-  try {
-    const r = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${AHREFS_API_KEY}` }
-    });
+    const qs = Object.entries(params).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+    const url = 'https://api.ahrefs.com/v3/' + endpoint + '?' + qs;
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + AHREFS_API_KEY } });
     if (!r.ok) {
-      const text = await r.text();
-      console.warn(`Ahrefs /${path} ${r.status}:`, text.slice(0, 200));
+      const body = await r.text();
+      console.warn('Ahrefs ' + endpoint + ' ' + r.status + ': ' + body.slice(0, 200));
       return {};
     }
-    return r.json();
+    return await r.json();
   } catch (e) {
-    console.warn(`Ahrefs /${path} fetch error:`, e.message);
+    console.warn('Ahrefs ' + endpoint + ' error: ' + e.message);
     return {};
   }
 }
 
-function ahrefsDate() {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+function countryFromDomain(domain) {
+  if (domain.endsWith('.com.au') || domain.endsWith('.au')) return 'au';
+  if (domain.endsWith('.co.uk') || domain.endsWith('.uk')) return 'gb';
+  if (domain.endsWith('.co.nz') || domain.endsWith('.nz')) return 'nz';
+  if (domain.endsWith('.ca')) return 'ca';
+  return 'us';
 }
 
-// ─── Web research ─────────────────────────────────────────────────────────────
-async function webResearch(clientName, domain) {
-  try {
-    const msg = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 3000,
-      system: 'You are a senior brand and digital marketing analyst. Search the web thoroughly. Return ONLY valid JSON with no markdown, no code fences, no extra text.',
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      messages: [{
-        role: 'user',
-        content: 'Do a thorough research audit of "' + clientName + '" (website: https://' + domain + '). Search for reviews, ads presence (Meta Ad Library, Google Transparency), website quality, their offer and pricing, social media presence, and recent news.\n\nReturn ONLY this JSON:\n{"review_summary":"","avg_rating":"e.g. 4.2/5 (127 Google reviews)","review_count":"","common_praise":[],"common_complaints":[],"review_platforms":[],"ads_running":false,"ad_platforms":[],"ad_description":"","ad_spend_estimate":"low/medium/high","website_assessment":"","website_cro_score":"poor/fair/good/excellent","website_trust_signals":[],"website_cro_issues":[],"offer_analysis":"","offer_strength":"weak/moderate/strong","pricing_visible":false,"social_presence":"","social_platforms":[{"platform":"","followers":"","activity":""}],"content_strategy":"","recent_news":[],"brand_reputation":"positive/mixed/negative","competitive_position":"","biggest_digital_gap":""}'
-      }]
-    });
-    const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
-    const clean = text.replace(/```[\w]*/g, '').replace(/```/g, '').trim();
-    const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
-    if (s >= 0 && e > s) return stripCites(JSON.parse(clean.substring(s, e + 1)));
-  } catch (err) {
-    console.warn('Web research failed:', err.message);
-  }
-  return {
-    review_summary: 'Research unavailable', avg_rating: '', review_count: '', common_praise: [], common_complaints: [],
-    review_platforms: [], ads_running: false, ad_platforms: [], ad_description: 'Could not detect',
-    ad_spend_estimate: 'unknown', website_assessment: 'Unable to assess', website_cro_score: 'unknown',
-    website_trust_signals: [], website_cro_issues: [], offer_analysis: 'Unable to analyse',
-    offer_strength: 'unknown', pricing_visible: false, social_presence: 'Unknown',
-    social_platforms: [], content_strategy: 'Unknown', recent_news: [],
-    brand_reputation: 'Unknown', competitive_position: 'Unknown', biggest_digital_gap: 'Unable to determine'
-  };
-}
+async function pullAhrefs(domain, sendProgress) {
+  const date = ahrefsDate();
+  const country = countryFromDomain(domain);
+  const out = {};
 
-// ─── Multi-pass AI Analysis Engine ───────────────────────────────────────────
-// Each pass focuses deeply on one area. Results are combined into a rich report.
-
-async function runAnalysis(clientName, domain, mode, bizType, ahrefs, research, answers, adsReports) {
-  const q = answers || {};
-  const isDeep = mode === 'deep';
-
-  // Build a shared context string used across all passes
-  const ctx = buildContext(clientName, domain, bizType, ahrefs, research, q);
-
-  // Run passes in parallel where possible
-  const hasAdsData = adsReports && (adsReports.meta || adsReports.google);
-
-  async function safePass(fn, name) {
-    try { return await fn(); }
-    catch(e) { console.warn('Pass failed:', name, e.message); return {}; }
-  }
-
-  const [
-    execAndScores,
-    gapAndForecast,
-    personaAndOffer,
-    competitorIntel,
-    roadmapAndChecklist,
-    adsAnalysis
-  ] = await Promise.all([
-    safePass(() => pass_execAndScores(ctx, clientName, domain, ahrefs, research, isDeep), 'exec'),
-    safePass(() => pass_gapAndForecast(ctx, clientName, ahrefs, research, isDeep), 'gaps'),
-    safePass(() => pass_personaAndOffer(ctx, clientName, research, q, isDeep), 'persona'),
-    safePass(() => pass_competitorIntel(ctx, clientName, domain, ahrefs, research, isDeep), 'competitor'),
-    safePass(() => pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep), 'roadmap'),
-    hasAdsData ? safePass(() => pass_adsAnalysis(ctx, clientName, adsReports, ahrefs), 'ads') : Promise.resolve({ads_analysis: null})
+  sendProgress(5);
+  const [dr, metrics] = await Promise.all([
+    ahrefsGet('site-explorer/domain-rating', { target: domain, date: date }),
+    ahrefsGet('site-explorer/metrics', { target: domain, date: date, mode: 'subdomains' })
   ]);
-
-  // Merge all passes into one report object
-  return {
-    ...execAndScores,
-    ...gapAndForecast,
-    ...personaAndOffer,
-    ...competitorIntel,
-    ...roadmapAndChecklist,
-    ...adsAnalysis
-  };
-}
-
-// Strip XML/cite tags that web search injects into responses
-function stripCites(obj) {
-  if (typeof obj === 'string') {
-    return obj
-      .replace(/<cite[^>]*>.*?<\/cite>/gi, '')
-      .replace(/<[^>]+>/g, '')
-      .replace(/\s{2,}/g, ' ')
-      .trim();
+  if (dr.domain_rating) {
+    out.domain_rating = Math.round(dr.domain_rating.domain_rating || 0);
+    out.ahrefs_rank = dr.domain_rating.ahrefs_rank;
   }
-  if (Array.isArray(obj)) return obj.map(stripCites).filter(Boolean);
-  if (obj && typeof obj === 'object') {
-    const out = {};
-    for (const k of Object.keys(obj)) out[k] = stripCites(obj[k]);
-    return out;
+  if (metrics.metrics) {
+    out.org_traffic = Math.round(metrics.metrics.org_traffic || 0);
+    out.org_keywords = metrics.metrics.org_keywords || 0;
+    out.org_keywords_1_3 = metrics.metrics.org_keywords_1_3 || 0;
+    out.org_cost = metrics.metrics.org_cost || 0;
+    out.paid_traffic = Math.round(metrics.metrics.paid_traffic || 0);
+    out.paid_keywords = metrics.metrics.paid_keywords || 0;
+    out.paid_pages = metrics.metrics.paid_pages || 0;
   }
-  return obj;
-}
 
-function buildContext(clientName, domain, bizType, ahrefs, research, q) {
-  return `
-CLIENT: ${clientName} | DOMAIN: ${domain} | TYPE: ${bizType}
-FINANCIALS: Revenue ${(q.financials||{}).fin_revenue} → Target ${(q.financials||{}).fin_target} | Ad spend: ${(q.financials||{}).fin_adspend}
-GOALS: ${(q.financials||{}).fin_goals}
-BRAND: ${(q.brand||{}).brand_desc} | USP: ${(q.brand||{}).brand_usp}
-OBSTACLES: ${(q.obstacles||{}).obs_main} | Tried: ${(q.obstacles||{}).obs_tried}
-MARKETING: Channels: ${JSON.stringify((q.marketing||{}).mkt_channels)} | Best: ${(q.marketing||{}).mkt_best}
-COMPETITORS (stated): ${(q.competitors||{}).comp_main}
-PRODUCTS: ${(q.products||{}).prod_main} | AOV: ${(q.products||{}).prod_aov}
-RETENTION: LTV: ${(q.retention||{}).ret_ltv} | Strategy: ${(q.retention||{}).ret_strategy}
-PERSONAS: ${(q.personas||{}).persona_who} | Journey: ${(q.personas||{}).persona_journey}
-PAIN POINTS: Before: ${(q.painpoints||{}).pain_before} | Dream: ${(q.painpoints||{}).pain_dream}
-OBJECTIONS: ${(q.objections||{}).obj_main} | Handling: ${(q.objections||{}).obj_handle}
-REVIEWS (stated): ${(q.reviews||{}).rev_rating} | Positive: ${(q.reviews||{}).rev_positive}
+  sendProgress(20);
+  const kw = await ahrefsGet('site-explorer/organic-keywords', {
+    target: domain, date: date, country: country, limit: 15,
+    select: 'keyword,best_position,volume,sum_traffic,keyword_difficulty',
+    order_by: 'sum_traffic:desc'
+  });
+  out.keywords = (kw.keywords || []).map(k => ({
+    keyword: k.keyword, best_position: k.best_position,
+    volume: k.volume, sum_traffic: k.sum_traffic, keyword_difficulty: k.keyword_difficulty
+  }));
 
-LIVE AHREFS DATA:
-DR: ${ahrefs.domain_rating}/100 | Organic: ${(ahrefs.org_traffic||0).toLocaleString()}/mo | Paid: ${ahrefs.paid_traffic||0}
-Keywords: ${ahrefs.org_keywords||0} total (${ahrefs.org_keywords_1_3||0} in top 3)
-Backlinks: ${ahrefs.backlinks_live||0} | Ref domains: ${ahrefs.ref_domains||0}
-Traffic value: ${ahrefs.org_cost ? '$'+Math.round(ahrefs.org_cost/100).toLocaleString()+'/mo' : 'N/A'}
-Top keywords: ${JSON.stringify((ahrefs.keywords||[]).slice(0,6))}
+  sendProgress(35);
+  const comps = await ahrefsGet('site-explorer/organic-competitors', {
+    target: domain, date: date, country: country, limit: 8,
+    select: 'competitor_domain,domain_rating,keywords_common,traffic',
+    order_by: 'keywords_common:desc'
+  });
+  out.competitors = (comps.competitors || []).map(c => ({
+    competitor_domain: c.competitor_domain, domain_rating: c.domain_rating,
+    keywords_common: c.keywords_common, traffic: c.traffic
+  }));
 
-WEB RESEARCH:
-Reviews: ${research.avg_rating} (${research.review_count}) | Sentiment: ${research.brand_reputation}
-Praise: ${(research.common_praise||[]).join('; ')}
-Complaints: ${(research.common_complaints||[]).join('; ')}
-Ads: ${research.ads_running ? 'RUNNING on '+((research.ad_platforms||[]).join(', ')) : 'NOT DETECTED'} | ${research.ad_description}
-Website CRO: ${research.website_cro_score} | ${research.website_assessment}
-CRO Issues: ${(research.website_cro_issues||[]).join('; ')}
-Offer: ${research.offer_strength} — ${research.offer_analysis}
-Social: ${research.social_presence}
-Biggest gap from research: ${research.biggest_digital_gap}
-`;
-}
-
-async function pass_execAndScores(ctx, clientName, domain, ahrefs, research, isDeep) {
-  const prompt = `You are a world-class brand strategist producing a paid brand diagnostic for ${clientName}.
-
-${ctx}
-
-TASK: Write a sharp, specific executive summary and performance health scorecard. Use REAL numbers from the Ahrefs and research data. Be commercially direct — this is a paid deliverable.
-
-Return ONLY valid JSON:
-{
-  "exec_past": "3-4 sentences: their current position using specific numbers (DR, traffic, revenue band, what's working/not). Name the domain. Cite actual Ahrefs metrics.",
-  "exec_future": "2-3 sentences: their stated goals, timeline, and what achieving it would mean for the business.",
-  "exec_agency": "2-3 sentences: the strategic approach this agency recommends — specific, not generic.",
-  "revenue_now": "stated/estimated current revenue",
-  "revenue_target": "their stated 12-month target",
-  "revenue_forecast_conservative": "conservative 12-month forecast with agency support",
-  "revenue_forecast_optimistic": "optimistic 12-month forecast",
-  "forecast_reasoning": "3-4 sentences: specific reasoning citing channels, conversion assumptions, and which gaps drive the uplift",
-  "health_scores": {
-    "seo": 0,
-    "paid": 0,
-    "content": 0,
-    "brand": 0,
-    "conversion": 0,
-    "retention": 0
-  },
-  "health_notes": {
-    "seo": "1 specific sentence on why this score — cite DR, keyword count, top-3 rankings",
-    "paid": "1 specific sentence — cite whether ads detected, spend level, platform",
-    "content": "1 specific sentence — cite content strategy finding from research",
-    "brand": "1 specific sentence — cite offer strength, CRO score, messaging clarity",
-    "conversion": "1 specific sentence — cite CRO assessment, website issues found",
-    "retention": "1 specific sentence — cite LTV, churn, retention strategy"
-  },
-  "digital_analysis": {
-    "summary": "4-5 sentences using specific Ahrefs numbers. Mention the DR, compare paid vs organic, highlight the most important signal. Be direct about what the numbers mean commercially.",
-    "signals": [
-      {"label": "specific signal name", "status": "good|warn|bad", "value": "specific metric", "insight": "what this means for revenue"}
-    ],
-    "keyword_opportunity": "specific untapped keyword opportunity based on their niche and current rankings",
-    "paid_gap": "specific assessment of their paid advertising gap and what it is costing them monthly"
+  sendProgress(50);
+  const [bl, tp] = await Promise.all([
+    ahrefsGet('site-explorer/backlinks-stats', { target: domain, date: date, mode: 'subdomains' }),
+    ahrefsGet('site-explorer/top-pages', {
+      target: domain, date: date, country: country, limit: 5,
+      select: 'url,sum_traffic,keywords', order_by: 'sum_traffic:desc'
+    })
+  ]);
+  if (bl.metrics) {
+    out.backlinks_live = bl.metrics.live || 0;
+    out.ref_domains = bl.metrics.live_refdomains || 0;
   }
-}`;
+  out.top_pages = (tp.pages || []).map(p => ({ url: p.url, sum_traffic: p.sum_traffic, keywords: p.keywords }));
 
-  return await callClaude(prompt, 2000, true);
+  return out;
 }
 
-async function pass_gapAndForecast(ctx, clientName, ahrefs, research, isDeep) {
-  const prompt = `You are a senior growth strategist. Analyse the data below and identify the most commercially significant gaps for ${clientName}.
-
-${ctx}
-
-TASK: Produce a rigorous gap analysis and revenue forecast. Each gap must have a specific revenue impact estimate. Use the Ahrefs data and web research to ground every finding — no generic gaps.
-
-Return ONLY valid JSON:
-{
-  "gaps": [
-    {
-      "title": "specific gap title",
-      "type": "critical|opportunity|warning",
-      "desc": "3-4 sentences: what the gap is, specific evidence from the data (cite Ahrefs numbers or research findings), estimated monthly/annual revenue being lost or left on the table, and why fixing it should be prioritised",
-      "revenue_impact": "e.g. $8,000-$15,000/month opportunity",
-      "effort": "low|medium|high",
-      "timeframe": "e.g. 2-4 weeks to implement"
-    }
-  ],
-  "forecast": {
-    "current_revenue": "stated or estimated",
-    "conservative_12m": "with foundational fixes only",
-    "optimistic_12m": "with full strategy execution",
-    "revenue_per_channel": [
-      {"channel": "channel name", "current": "current contribution", "potential": "12-month potential"}
-    ],
-    "key_assumptions": ["specific assumption 1", "specific assumption 2", "specific assumption 3"]
-  }
-}
-
-Rules:
-- Minimum 5 gaps for quick mode, 8 gaps for deep mode
-- Every gap must cite specific data (a number, a finding, a missing element)
-- Revenue impact must be specific (not "significant" — give a dollar range)
-- Include gaps from: SEO, paid ads, CRO, email/retention, offer, brand, content, social proof`;
-
-  const result = await callClaude(prompt, 2500, false);
-  // Also search for additional competitive intelligence
-  if (isDeep) {
-    try {
-      const extraResearch = await callClaudeWithSearch(
-        `Research the competitive paid advertising landscape for businesses like ${clientName} in their industry. What are competitors spending on ads? What keywords are they bidding on? What offers are converting in this market? What benchmarks should ${clientName} be targeting for CAC, ROAS, and conversion rates? Return specific, actionable intelligence.`,
-        1000
-      );
-      if (result.gaps && extraResearch) {
-        result.competitive_ad_intel = extraResearch;
-      }
-    } catch(e) { console.warn('Extra research failed:', e.message); }
-  }
-  return result;
-}
-
-async function pass_personaAndOffer(ctx, clientName, research, q, isDeep) {
-  const prompt = `You are a direct response copywriter and customer psychology expert analysing ${clientName}.
-
-${ctx}
-
-TASK: Build a detailed customer avatar and offer analysis. Use the questionnaire answers AND the web research (especially reviews) to make this specific and real. The persona should feel like a real person, not a template.
-
-Return ONLY valid JSON:
-{
-  "personas": [
-    {
-      "name": "specific persona name (not 'Persona 1')",
-      "tagline": "one-line description of who they are",
-      "who": "specific demographics and psychographics",
-      "income": "income range and financial situation",
-      "dream_outcome": "their specific dream outcome in their own words",
-      "trigger": "the exact moment/event that makes them decide to buy",
-      "pains": ["specific pain 1 (from reviews/questionnaire)", "specific pain 2", "specific pain 3", "specific pain 4"],
-      "objections": ["most common objection 1", "objection 2", "objection 3"],
-      "product_focus": ["which offers resonate most"],
-      "messaging_hook": "a specific, emotionally resonant hook this agency should test in ads and copy",
-      "where_to_find": "exactly where this person spends time online — platforms, communities, content they consume",
-      "buying_process": "how long, how many touchpoints, what convinces them"
-    }
-  ],
-  "offer_analysis": {
-    "offer_strength": "weak|moderate|strong",
-    "pricing_assessment": "specific assessment of whether pricing is competitive, too high, too low",
-    "value_proposition_clarity": "poor|fair|good|excellent",
-    "missing_elements": ["what the offer is missing vs best-in-class competitors"],
-    "conversion_killers": ["specific things on the website/in the sales process killing conversions"],
-    "quick_wins": ["3-5 specific changes to the offer or positioning that could increase conversions immediately"],
-    "upsell_opportunities": ["specific upsell or cross-sell opportunities they are missing"]
-  }
-}`;
-
-  return await callClaude(prompt, 2000, false);
-}
-
-async function pass_competitorIntel(ctx, clientName, domain, ahrefs, research, isDeep) {
-  const competitors = (ahrefs.competitors || []).slice(0, 5);
-  const prompt = `You are a competitive intelligence analyst. Analyse the market position of ${clientName} (${domain}).
-
-${ctx}
-
-AHREFS COMPETITOR DATA: ${JSON.stringify(competitors)}
-
-TASK: Produce a sharp competitor analysis that identifies where ${clientName} can win, where they are losing, and specific gaps in the market they can exploit. If ads are running, analyse the messaging. Be specific.
-
-Return ONLY valid JSON:
-{
-  "competitor_analysis": {
-    "summary": "4-5 sentences on the competitive landscape — who the real threats are, how ${clientName} stacks up on DR/traffic, what the market looks like",
-    "strengths_vs_competitors": ["specific advantage 1 with evidence", "advantage 2", "advantage 3"],
-    "weaknesses_vs_competitors": ["specific weakness 1 with evidence", "weakness 2", "weakness 3"],
-    "market_gaps": ["specific gap in the market competitors are not filling", "gap 2", "gap 3"],
-    "positioning_opportunity": "specific positioning recommendation — what angle ${clientName} should own that competitors are not",
-    "keyword_gaps": ["specific high-value keyword competitors rank for that ${clientName} does not"],
-    "content_gaps": ["specific content topics competitors are winning on that ${clientName} should create"]
-  },
-  "review_insights": {
-    "overall_sentiment": "positive|mixed|negative",
-    "avg_rating": "rating if found",
-    "key_themes": ["theme 1", "theme 2", "theme 3"],
-    "trust_signals": ["what builds trust with this audience"],
-    "reputation_risks": ["specific reputation gaps or risks"],
-    "recommendation": "specific action to improve review volume and sentiment"
-  }
-}`;
-
-  return await callClaude(prompt, 1500, false);
-}
-
-async function pass_roadmapAndChecklist(ctx, clientName, bizType, ahrefs, research, isDeep) {
-  const numPhases = isDeep ? 6 : 3;
-  const prompt = `You are a digital marketing director creating an execution roadmap for ${clientName}.
-
-${ctx}
-
-TASK: Create a specific, prioritised ${numPhases}-phase roadmap and detailed onboarding checklist. Every action must be specific to this business — no generic templates. Order by highest-impact-first within each phase. The checklist should be the literal first 90 days of work.
-
-Return ONLY valid JSON:
-{
-  "roadmap": [
-    {
-      "phase": "Phase 1",
-      "months": "Month 1-2",
-      "label": "Foundation & Quick Wins",
-      "items": [
-        {"task": "specific action", "detail": "why this matters for ${clientName} specifically, expected outcome"},
-        {"task": "specific action 2", "detail": "detail"}
-      ]
-    }
-  ],
-  "checklist": [
-    {
-      "phase": "Foundation",
-      "items": [
-        "Set up Google Analytics 4 with purchase/lead conversion events",
-        "Install Meta Pixel + Conversions API",
-        "Connect Google Search Console",
-        "Set up Google Tag Manager"
-      ]
-    },
-    {
-      "phase": "Acquisition",
-      "items": [
-        "specific acquisition task for ${clientName}",
-        "specific task 2"
-      ]
-    },
-    {
-      "phase": "Conversion",
-      "items": ["specific CRO task based on issues found", "specific task 2"]
-    },
-    {
-      "phase": "Retention",
-      "items": ["specific retention task", "specific task 2"]
-    }
-  ],
-  "closing": {
-    "headline": "a specific, commercially compelling headline summarising the opportunity",
-    "narrative": "4-5 sentences: what this diagnostic has revealed, the specific opportunity size, why acting now matters, what the cost of inaction is (use specific numbers where possible)",
-    "next_step": "one specific, concrete next step with a timeframe"
-  }
-}
-
-Rules:
-- ${isDeep ? 'Create all 6 phases, minimum 3 specific actions per phase' : 'Create 3 phases, minimum 3 specific actions per phase'}
-- Every roadmap item must reference something specific about ${clientName}'s situation
-- Checklist items must be in the order an agency would actually do them in week 1-8
-- Closing narrative must mention a specific number (revenue opportunity, traffic gap, conversion rate)`;
-
-  return await callClaude(prompt, 2000, false);
-}
-
-async function pass_adsAnalysis(ctx, clientName, adsReports, ahrefs) {
-  const metaData = adsReports.meta ? JSON.stringify(adsReports.meta).slice(0, 8000) : null;
-  const googleData = adsReports.google ? JSON.stringify(adsReports.google).slice(0, 8000) : null;
-
-  const platformSummaries = [];
-  if (metaData) platformSummaries.push(`META ADS DATA:\n${metaData}`);
-  if (googleData) platformSummaries.push(`GOOGLE ADS DATA:\n${googleData}`);
-
-  const prompt = `You are a world-class paid media analyst. Analyse the following ads account data for ${clientName} and produce a detailed audit.
-
-BUSINESS CONTEXT:
-${ctx}
-
-ADS ACCOUNT DATA:
-${platformSummaries.join('\n\n')}
-
-LIVE AHREFS PAID DATA:
-Paid traffic: ${ahrefs.paid_traffic || 0} | Paid keywords: ${ahrefs.paid_keywords || 0}
-
-TASK: Produce a comprehensive paid ads audit. Identify what is working, what is wasting budget, and specific optimisation opportunities. Calculate key metrics if not provided. Be specific with numbers from the data.
-
-Return ONLY valid JSON:
-{
-  "ads_analysis": {
-    "overall_grade": "A|B|C|D|F",
-    "overall_summary": "4-5 sentences on overall account health, key strengths and critical issues",
-    "platforms_analysed": ["Meta Ads", "Google Ads"],
-    "total_spend_period": "total spend identified in the data",
-    "total_revenue_period": "total revenue/conversions identified",
-    "overall_roas": "calculated ROAS",
-    "meta_ads": {
-      "present": true,
-      "spend": "spend found in data",
-      "revenue": "revenue/value found",
-      "roas": "calculated",
-      "cpc": "cost per click",
-      "ctr": "click through rate",
-      "cpm": "cost per 1000 impressions",
-      "best_performing": "description of best performing campaign/ad set",
-      "worst_performing": "description of worst performing — wasted budget",
-      "audience_assessment": "assessment of targeting quality",
-      "creative_assessment": "assessment of ad creative quality based on CTR/engagement",
-      "budget_waste": "estimated monthly budget being wasted and why",
-      "quick_wins": ["specific optimisation 1", "specific optimisation 2", "specific optimisation 3"]
-    },
-    "google_ads": {
-      "present": true,
-      "spend": "spend found",
-      "revenue": "revenue found",
-      "roas": "calculated",
-      "quality_score_avg": "average quality score if available",
-      "impression_share": "impression share if available",
-      "best_performing": "best campaign/keyword",
-      "worst_performing": "wasted spend",
-      "keyword_assessment": "are they targeting the right keywords?",
-      "budget_waste": "estimated monthly waste",
-      "quick_wins": ["optimisation 1", "optimisation 2", "optimisation 3"]
-    },
-    "critical_issues": [
-      {"issue": "specific critical issue", "impact": "estimated monthly cost of this issue", "fix": "specific action to resolve"}
-    ],
-    "optimisation_roadmap": [
-      {"priority": 1, "action": "specific action", "expected_impact": "e.g. +15% ROAS", "timeframe": "1 week"}
-    ],
-    "benchmark_comparison": {
-      "industry_avg_roas": "industry benchmark",
-      "your_roas": "their ROAS",
-      "roas_gap": "the gap",
-      "industry_avg_ctr": "benchmark",
-      "your_ctr": "their CTR"
-    }
-  }
-}`;
-
-  return await callClaude(prompt, 3000, false);
-}
-
-// ─── Claude API helpers ───────────────────────────────────────────────────────
-async function callClaude(prompt, maxTokens, useSearch) {
-  const tools = useSearch ? [{ type: 'web_search_20250305', name: 'web_search' }] : undefined;
-  const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: maxTokens || 2000,
-    system: 'You are a world-class brand strategist and growth consultant. Every output is a paid deliverable. Be specific, commercially sharp, and data-driven. Use real numbers. No generic filler. Return ONLY valid JSON — no markdown, no fences, no extra text.',
-    tools: tools,
+// ─── Claude helpers ───────────────────────────────────────────────────────────
+async function callClaude(prompt, maxTokens) {
+  const m = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: maxTokens || 3000,
     messages: [{ role: 'user', content: prompt }]
   });
-  const text = msg.content.filter(b => b.type === 'text').map(b => b.text).join('');
-  const clean = text.replace(/```[\w]*/g, '').replace(/```/g, '').trim();
-  const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
-  if (s >= 0 && e > s) return stripCites(JSON.parse(clean.substring(s, e + 1)));
-  throw new Error('Failed to parse JSON from Claude response');
+  return m.content.filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
 async function callClaudeWithSearch(prompt, maxTokens) {
-  const msg = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
-    max_tokens: maxTokens || 1000,
-    system: 'You are a competitive intelligence analyst. Search the web and return specific, actionable findings. Be concise and direct.',
-    tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+  const m = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: maxTokens || 3000,
+    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
     messages: [{ role: 'user', content: prompt }]
   });
-  return msg.content.filter(b => b.type === 'text').map(b => b.text).join('').trim();
+  return m.content.filter(b => b.type === 'text').map(b => b.text).join('');
 }
 
+function stripCites(s) {
+  return String(s || '').replace(/<cite[^>]*>/g, '').replace(/<\/cite>/g, '');
+}
 
-app.listen(PORT, () => console.log(`Brand Diagnostic running on port ${PORT}`));
+function parseJSON(text) {
+  let t = stripCites(text).trim();
+  t = t.replace(/^```json/i, '').replace(/^```/, '').replace(/```$/, '').trim();
+  const first = t.indexOf('{');
+  const last = t.lastIndexOf('}');
+  if (first >= 0 && last > first) t = t.slice(first, last + 1);
+  return JSON.parse(t);
+}
+
+async function safePass(name, fn) {
+  try { return await fn(); }
+  catch (e) { console.error('Pass failed: ' + name + ' — ' + e.message); return {}; }
+}
+
+// ─── Web research pass ────────────────────────────────────────────────────────
+async function webResearch(domain, clientName, bizType) {
+  const prompt = 'You are a digital marketing analyst. Research the business "' + clientName + '" (website: ' + domain + '). '
+    + 'Search for: (1) their customer reviews on Google, ProductReview, Trustpilot etc — average rating, count, common praise and complaints; '
+    + '(2) whether they are running paid ads — check Meta Ad Library and Google Ads Transparency Centre mentions; '
+    + '(3) their website quality from a CRO perspective — value proposition, trust signals, conversion issues; '
+    + '(4) their social media presence and activity; '
+    + '(5) their offer strength vs competitors. '
+    + 'Business type: ' + bizType + '. '
+    + 'Respond with ONLY a JSON object (no markdown, no preamble) with these exact keys: '
+    + 'review_summary (string), avg_rating (string like "4.4/5" or null), review_count (string or null), '
+    + 'common_praise (array of strings), common_complaints (array of strings), review_platforms (array of strings), '
+    + 'ads_running (boolean), ad_platforms (array of strings), ad_description (string), ad_spend_estimate ("none"|"low"|"medium"|"high"), '
+    + 'website_assessment (string), website_cro_score ("poor"|"fair"|"good"|"excellent"), '
+    + 'website_trust_signals (array of strings), website_cro_issues (array of strings), '
+    + 'offer_analysis (string), offer_strength ("weak"|"moderate"|"strong"), pricing_visible (boolean), '
+    + 'social_presence (string), social_platforms (array of {platform, followers, activity}), '
+    + 'content_strategy (string), brand_reputation ("negative"|"mixed"|"positive"), '
+    + 'competitive_position (string), biggest_digital_gap (string).';
+  const text = await callClaudeWithSearch(prompt, 4000);
+  return parseJSON(text);
+}
+
+// ─── Analysis context ─────────────────────────────────────────────────────────
+function buildContext(payload, ahrefs, research) {
+  return 'CLIENT: ' + payload.clientName + ' (' + payload.domain + ')\n'
+    + 'BUSINESS TYPE: ' + payload.bizType + '\n'
+    + 'DIAGNOSTIC MODE: ' + payload.mode + '\n\n'
+    + 'QUESTIONNAIRE ANSWERS:\n' + JSON.stringify(payload.answers, null, 1) + '\n\n'
+    + 'LIVE AHREFS DATA:\n' + JSON.stringify(ahrefs, null, 1) + '\n\n'
+    + 'WEB RESEARCH FINDINGS:\n' + JSON.stringify(research, null, 1);
+}
+
+function jsonInstruction() {
+  return '\n\nRespond with ONLY a valid JSON object. No markdown fences, no preamble, no commentary. Use plain ASCII punctuation. Do not use em dashes.';
+}
+
+// ─── Analysis passes ──────────────────────────────────────────────────────────
+async function pass_execAndScores(ctx) {
+  const prompt = 'You are a senior growth strategist at a performance marketing agency preparing a brand diagnostic report. Based on the data below, write the executive summary.\n\n' + ctx
+    + '\n\nReturn JSON with keys: '
+    + 'exec_past (string, 3-4 sentences: where the business is today, citing specific numbers from the Ahrefs data and research), '
+    + 'exec_future (string, 2-3 sentences: their stated goals and what hitting them requires), '
+    + 'exec_agency (string, 2-3 sentences: the recommended strategic approach), '
+    + 'revenue_now (string like "$780K", estimated from the revenue band answer), '
+    + 'revenue_target (string, from their stated target).'
+    + jsonInstruction();
+  return parseJSON(await callClaude(prompt, 2000));
+}
+
+async function pass_gapAndForecast(ctx, mode) {
+  let extra = '';
+  if (mode === 'deep') {
+    try {
+      const research2 = await callClaudeWithSearch(
+        'Search for current industry benchmark conversion rates, ROAS benchmarks and channel revenue mix for this business context, and summarise in 5 bullet points:\n\n' + ctx.slice(0, 3000), 1500);
+      extra = '\n\nADDITIONAL BENCHMARK RESEARCH:\n' + stripCites(research2);
+    } catch (e) { console.warn('Deep research skipped: ' + e.message); }
+  }
+  const prompt = 'You are a growth strategist. Identify the revenue gaps and build a 12-month forecast.\n\n' + ctx + extra
+    + '\n\nReturn JSON with keys: '
+    + 'gaps (array of exactly 5 objects: {title, type ("critical"|"warning"|"opportunity"), desc (2-3 sentences with specific numbers where possible)}), '
+    + 'forecast (object: {current_revenue (string), conservative_12m (string), optimistic_12m (string), '
+    + 'revenue_per_channel (array of {channel, current, potential}), key_assumptions (array of 3 strings)}), '
+    + 'revenue_forecast_conservative (string), revenue_forecast_optimistic (string), '
+    + 'forecast_reasoning (string, 3-4 sentences explaining the forecast logic).'
+    + jsonInstruction();
+  return parseJSON(await callClaude(prompt, 3000));
+}
+
+async function pass_personaAndOffer(ctx) {
+  const prompt = 'You are a customer research strategist. Build the primary customer avatar for this business.\n\n' + ctx
+    + '\n\nReturn JSON with keys: '
+    + 'personas (array of 1 object: {name (memorable alliterative name like "Backyard Ben"), tagline, '
+    + 'who (demographic description), dream_outcome (string, first person aspiration), '
+    + 'pains (array of 4 short strings), objections (array of 3 short strings), '
+    + 'messaging_hook (one punchy sentence of ad copy that would stop this person scrolling)}).'
+    + jsonInstruction();
+  return parseJSON(await callClaude(prompt, 2000));
+}
+
+async function pass_competitorIntel(ctx) {
+  const prompt = 'You are a competitive intelligence analyst. Analyse this business against its competitors using the Ahrefs competitor data and questionnaire answers.\n\n' + ctx
+    + '\n\nReturn JSON with keys: '
+    + 'competitor_analysis (object: {summary (3-4 sentences on the competitive landscape and where the winnable ground is), '
+    + 'market_gaps (array of 3 strings: gaps no competitor is serving), '
+    + 'keyword_gaps (array of 3 strings: keywords competitors rank for that this business does not, with monthly volume estimates in brackets)}).'
+    + jsonInstruction();
+  return parseJSON(await callClaude(prompt, 2000));
+}
+
+async function pass_roadmapAndChecklist(ctx) {
+  const prompt = 'You are a growth strategist. Build the execution plan.\n\n' + ctx
+    + '\n\nReturn JSON with keys: '
+    + 'roadmap (array of 3 objects: {phase ("Phase 1"|"Phase 2"|"Phase 3"), month ("Month 1-2" etc), label (short phase name), '
+    + 'items (array of 3 objects: {task (short action)})}), '
+    + 'checklist (array of 4 objects: {phase ("Foundation"|"Acquisition"|"Conversion"|"Retention"), items (array of 4 short task strings)}), '
+    + 'closing (object: {headline (one bold sentence quantifying the opportunity), '
+    + 'narrative (4-5 sentences: the story of what this diagnostic found and the cost of delay), '
+    + 'next_step (one specific action with a timeframe)}).'
+    + jsonInstruction();
+  return parseJSON(await callClaude(prompt, 3000));
+}
+
+async function pass_adsAnalysis(ctx, adsReports) {
+  const metaRows = (adsReports.meta || []).slice(0, 150);
+  const googleRows = (adsReports.google || []).slice(0, 150);
+  if (!metaRows.length && !googleRows.length) return {};
+  const prompt = 'You are a paid media auditor. Audit this ad account data.\n\n' + ctx.slice(0, 2500)
+    + '\n\nMETA ADS EXPORT (' + metaRows.length + ' rows):\n' + JSON.stringify(metaRows).slice(0, 15000)
+    + '\n\nGOOGLE ADS EXPORT (' + googleRows.length + ' rows):\n' + JSON.stringify(googleRows).slice(0, 15000)
+    + '\n\nReturn JSON with key ads_analysis (object: {overall_grade ("A"|"B"|"C"|"D"|"F"), '
+    + 'overall_summary (3-4 sentences), total_spend_period (string), total_revenue_period (string), overall_roas (string), '
+    + 'critical_issues (array of {issue, impact, fix}), '
+    + 'meta_ads (object or {present:false}: {present:true, spend, revenue, roas, cpc, ctr, cpm, best_performing, budget_waste, quick_wins (array of 3 strings)}), '
+    + 'google_ads (object or {present:false}: {present:true, spend, revenue, roas, ctr, best_performing, budget_waste, quick_wins (array of 3 strings)})}).'
+    + jsonInstruction();
+  return parseJSON(await callClaude(prompt, 3000));
+}
+
+// ─── Run all analysis passes ──────────────────────────────────────────────────
+async function runAnalysis(payload, ahrefs, research, sendProgress) {
+  const ctx = buildContext(payload, ahrefs, research);
+  sendProgress(75);
+  const hasAds = payload.adsReports && ((payload.adsReports.meta || []).length || (payload.adsReports.google || []).length);
+  const [execP, gapP, personaP, compP, roadP, adsP] = await Promise.all([
+    safePass('exec', () => pass_execAndScores(ctx)),
+    safePass('gaps', () => pass_gapAndForecast(ctx, payload.mode)),
+    safePass('persona', () => pass_personaAndOffer(ctx)),
+    safePass('competitors', () => pass_competitorIntel(ctx)),
+    safePass('roadmap', () => pass_roadmapAndChecklist(ctx)),
+    hasAds ? safePass('ads', () => pass_adsAnalysis(ctx, payload.adsReports)) : Promise.resolve({})
+  ]);
+  sendProgress(95);
+  const report = Object.assign({}, execP, gapP, personaP, compP, roadP, adsP);
+  // Surface a real error instead of silently rendering an empty report
+  const passResults = [execP, gapP, personaP, compP, roadP];
+  const failedCount = passResults.filter(p => !p || Object.keys(p).length === 0).length;
+  if (failedCount === passResults.length) {
+    throw new Error('All AI analysis passes failed. Check /debug/sources?key=ADMIN_KEY to see which data source is down, and check Railway logs for "Pass failed:" messages.');
+  }
+  return report;
+}
+
+// ─── Generate endpoint (SSE) ─────────────────────────────────────────────────
+app.post('/generate', async (req, res) => {
+  // Auth check
+  const token = req.headers['x-auth-token'];
+  if (!token || !sessions[token]) {
+    return res.status(401).json({ error: 'Not authenticated. Please log in again.' });
+  }
+
+  const payload = req.body || {};
+  if (!payload.clientName) return res.status(400).json({ error: 'Missing client name' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders && res.flushHeaders();
+
+  const send = obj => res.write('data: ' + JSON.stringify(obj) + '\n\n');
+  const sendProgress = pct => send({ step: 'progress', pct: pct });
+
+  try {
+    // 1. Ahrefs pulls (skipped gracefully if no domain)
+    let ahrefs = {};
+    if (payload.domain) {
+      ahrefs = await pullAhrefs(payload.domain, sendProgress);
+    }
+    sendProgress(55);
+
+    // 2. Web research
+    let research = {};
+    try {
+      research = await webResearch(payload.domain || payload.clientName, payload.clientName, payload.bizType || 'business');
+    } catch (e) {
+      console.warn('webResearch failed: ' + e.message);
+    }
+    sendProgress(70);
+
+    // 3. AI analysis passes
+    const report = await runAnalysis(payload, ahrefs, research, sendProgress);
+
+    sendProgress(100);
+    send({
+      step: 'result',
+      report: report,
+      ahrefs: ahrefs,
+      research: research,
+      clientName: payload.clientName,
+      domain: payload.domain || '',
+      agency: payload.agency || {}
+    });
+    res.end();
+  } catch (e) {
+    console.error('Generate failed:', e.message);
+    send({ step: 'error', msg: e.message });
+    res.end();
+  }
+});
+
+app.listen(PORT, () => console.log('Brand Diagnostic tool v2.5.0 running on port ' + PORT));
